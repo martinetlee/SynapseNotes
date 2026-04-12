@@ -1,0 +1,4 @@
+# Tag Registry — auto-maintained, descriptive not prescriptive.
+# Claude adds new tags freely. /kb-review flags sprawl and suggests consolidation.
+# Format: tag-name: "short description"
+tags: {}

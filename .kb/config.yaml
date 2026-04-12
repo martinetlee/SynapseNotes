@@ -1,0 +1,9 @@
+# Knowledge Base Configuration
+notes_dir: notes
+naming: slugified  # slugified title, e.g. tcp-congestion-control.md
+note_types:
+  - question
+  - concept
+  - reference
+  - insight
+web_search: true  # /kb-question can use web search
