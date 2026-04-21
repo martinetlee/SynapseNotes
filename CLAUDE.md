@@ -14,7 +14,7 @@ references/     — Source material for ingestion (READ-ONLY — never modify)
 
 ## Read-Only Directories
 
-**`references/`** — Contains source material (PDFs, articles, documents) for ingestion via `/kb-ingest`. Claude may **write new files** here (e.g. saving fetched URL content), but must **never edit or delete existing files**. Treat existing files as read-only source of truth.
+**`references/`** — Contains structured summaries of source material (papers, articles, docs). Each file has the external URL at the top (`Source: https://...`) and a summary of key content. Claude may **write new files** here, but must **never edit or delete existing files**. Notes cite these local files rather than external URLs directly — the reference file is the bridge between the KB and the outside world.
 
 ## Note Format
 
@@ -49,8 +49,8 @@ related: []
 4. **Tags**: Use existing tags from taxonomy.yaml when applicable. Create new tags freely when needed.
 5. **Update vs Create**: When a closely related note exists, update it if the new info deepens the same concept. Create a new note + link if it's a distinct concept.
 6. **Key Takeaways**: Always end with bullet-point takeaways for quick scanning.
-7. **Sources**: Include URLs, file paths, or other references when information comes from web search, ingested files, or external content. Frontmatter `sources` is a list of all sources (URLs, file paths, book titles, etc.).
-8. **Citations**: Always cite sources inline when referencing external information. Use `[text](url)` for web sources, or `[text](file-path)` / `(Source: Book Title, p.123)` for other source types. Inline citations show *which* claim comes from *which* source.
+7. **Sources**: Frontmatter `sources` is a list of local reference file paths (e.g. `../references/filename.md`). These are the authoritative source pointers for the note.
+8. **Citations**: Always cite sources inline by linking to the local reference file: `[display text](../references/filename.md)`. The reference file itself contains the external URL. This keeps the KB self-contained and offline-verifiable. For sources not saved locally, use `[text](url)` as a fallback, but prefer saving substantive sources to `references/` first.
 
 ## KB Role
 

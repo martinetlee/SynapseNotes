@@ -2,7 +2,7 @@
 name: kb-research
 description: Agentic research loop that deeply investigates a topic via web search and saves findings as atomic notes
 user_invocable: true
-arguments: "Topic to research. Optional flags: --depth=shallow|medium|deep (default: medium), --checkpoint=plan|each|end (default: plan+end)"
+arguments: "Topic to research. Optional flags: --depth shallow or medium or deep, --checkpoint plan or each or end"
 ---
 
 # /kb-research
@@ -71,7 +71,16 @@ For each research question, run the research loop:
    - Does it answer the question or part of it?
    - Does it raise new questions worth following?
 
-3. **Save useful sources** — Write fetched content to `references/` as markdown files with slugified names. Only save sources that are substantive and worth citing — don't save every search result.
+3. **Save useful sources** — Write fetched content to `references/` as markdown files with slugified names. Format:
+   ```
+   # Title
+   Source: https://original-url
+   Fetched: YYYY-MM-DD
+
+   ## Key Content
+   (structured summary of findings)
+   ```
+   Only save sources that are substantive and worth citing — don't save every search result. These files become the citation targets for notes.
 
 4. **Extract findings** — Note key facts, claims, frameworks, and insights. Track which source each finding comes from.
 
@@ -140,8 +149,9 @@ After all questions are researched:
    a. Search existing notes for overlap
    b. If overlap exists, ask user: update or create new?
    c. Create/update following CLAUDE.md format
-   d. **Cite all sources inline** — every claim must trace back to a source with `[text](references/filename)` or `[text](url)`
+   d. **Cite all sources inline via local reference files** — every claim must trace back to `[display text](../references/filename.md)`. The reference file contains the external URL. Never cite external URLs directly in notes if a reference file exists for that source.
    e. Add `[[wikilinks]]` to the research hub and related notes, in both directions
+   f. **Define terms inline** — on first use of a technical term not commonly known, add a brief parenthetical definition. Link to a concept note via wikilink only if one exists.
 
 5. **Create research hub note** — A `reference`-type note that:
    - Summarizes the research topic and key findings
