@@ -2,3 +2,10 @@ notes/*
 !notes/.gitkeep
 references/*
 !references/.gitkeep
+publish/*
+!publish/.gitkeep
+.kb/index/
+.obsidian/
+.DS_Store
+*.canvas
+Untitled.canvas
