@@ -146,12 +146,13 @@ After all questions are researched:
 3. **Wait for user selection** — User picks which notes to create.
 
 4. **Create notes** — For each selected note:
-   a. Search existing notes for overlap
-   b. If overlap exists, ask user: update or create new?
+   a. **Contradiction check**: Run `python3 .kb/kb-index.py search "NOTE_TITLE"` to find similar existing notes. If score > 0.3, read those notes and check for conflicting claims. If contradictions found, ask user: reconcile, update existing, or create separate with link?
+   b. **Dedup check**: If similar note score > 0.5, it likely covers the same concept — suggest updating the existing note instead of creating a duplicate.
    c. Create/update following CLAUDE.md format
    d. **Cite all sources inline via local reference files** — every claim must trace back to `[display text](../references/filename.md)`. The reference file contains the external URL. Never cite external URLs directly in notes if a reference file exists for that source.
    e. Add `[[wikilinks]]` to the research hub and related notes, in both directions
    f. **Define terms inline** — on first use of a technical term not commonly known, add a brief parenthetical definition. Link to a concept note via wikilink only if one exists.
+   g. **Rebuild index**: After creating all notes, run `python3 .kb/kb-index.py build` to update the search index.
 
 5. **Create research hub note** — A `reference`-type note that:
    - Summarizes the research topic and key findings

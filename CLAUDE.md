@@ -5,11 +5,15 @@ A Claude-powered knowledge base using Obsidian-compatible markdown notes.
 ## Project Structure
 
 ```
-notes/          — All atomic notes (flat, one concept per file)
-references/     — Source material for ingestion (READ-ONLY — never modify)
-.kb/config.yaml — KB settings
+notes/           — All atomic notes (flat, one concept per file)
+references/      — Source material for ingestion (READ-ONLY — never modify)
+publish/         — Generated HTML reports for sharing
+.kb/config.yaml  — KB settings
 .kb/taxonomy.yaml — Loose tag registry (descriptive, not prescriptive)
-.claude/skills/ — Claude Code skill definitions
+.kb/index/       — Search index (TF-IDF vectors, metadata cache)
+.kb/build-report.py  — HTML report builder
+.kb/kb-index.py  — Search index builder and query engine
+.claude/skills/  — Claude Code skill definitions
 ```
 
 ## Read-Only Directories
@@ -27,12 +31,17 @@ tags: [tag1, tag2]
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 type: question | concept | reference | insight
+valid_from: YYYY-MM-DD    # when this information became true (optional)
+valid_until: null          # null = still valid; date = superseded/expired
+deprecated_by: null        # slug of superseding note, if any
 sources: []
 related: []
 ---
 
 (body in markdown with [[wikilinks]] to related notes)
 ```
+
+**Temporal validity**: Notes can become outdated. `valid_from`/`valid_until` track when information was true. `deprecated_by` points to the superseding note. Default retrieval returns only currently-valid entries. `/kb-review` flags notes past their expected freshness window.
 
 ## Note Types
 

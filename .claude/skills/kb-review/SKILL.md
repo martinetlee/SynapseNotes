@@ -47,6 +47,18 @@ Audit the knowledge base for quality issues and suggest improvements.
    - Notes with inline citations but empty `sources` frontmatter
    - Notes of type `reference` with no sources at all
 
+   ### Temporal Staleness
+   - Notes with `valid_until` date in the past (expired knowledge)
+   - Notes with `deprecated_by` set (superseded)
+   - Run `python3 .kb/kb-index.py stale` to find candidates
+
+   ### Retrieval Quality
+   - Run `python3 .kb/kb-index.py stats` for index health
+   - Test 5-10 representative queries via `python3 .kb/kb-index.py search "query"` and check if top results are relevant
+   - Run `python3 .kb/kb-index.py coverage "TOPIC"` for each major KB topic area to identify coverage gaps
+   - Flag notes that never appear in any search result (potential tagging/content issues)
+   - Check for high-similarity note pairs via `python3 .kb/kb-index.py similar SLUG` that might be duplicates or contradictions
+
 3. **Present report** — Show findings grouped by check type. For each issue:
    - What the problem is
    - Which notes are affected

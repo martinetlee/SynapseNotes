@@ -11,8 +11,10 @@ Synthesize everything the KB knows about a topic into a coherent, structured nar
 
 ## Steps
 
-1. **Find relevant notes** — Search `notes/` broadly for the topic:
-   - Filename and tag matches
+1. **Find relevant notes** — Use the search index + manual search:
+   - Run `python3 .kb/kb-index.py search "TOPIC"` for semantic ranking
+   - Run `python3 .kb/kb-index.py coverage "TOPIC"` to assess coverage level
+   - Also check: filename and tag matches
    - Body content matches
    - Notes linked from direct matches (follow the wikilink graph)
    - Cast a wide net — include tangentially related notes that add context
@@ -26,7 +28,13 @@ Synthesize everything the KB knows about a topic into a coherent, structured nar
    - Cites `[[note-name]]` inline for every claim sourced from a note
    - Preserves inline citations from the original notes (URLs, file paths, etc.)
 
-4. **Highlight gaps** — After the narrative, add a section:
+4. **Context sufficiency & claim verification** — Before presenting:
+   - Check: does the KB actually have enough coverage to explain this topic? If coverage is "not-covered" or "partially-covered", say so explicitly at the top.
+   - For each factual claim in the narrative, verify it traces to a specific `[[note]]`. If a claim can't be sourced to a note, either remove it or mark it as "Claude's general knowledge, not from KB".
+   - If notes contradict each other, present both perspectives with citations.
+   - **Never silently fill gaps** — this is the #1 hallucination vector.
+
+5. **Highlight gaps** — After the narrative, add a section:
 
    ```
    ## Gaps in KB Coverage
