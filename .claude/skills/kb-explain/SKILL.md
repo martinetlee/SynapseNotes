@@ -60,12 +60,30 @@ Synthesize everything the KB knows about a topic into a coherent, structured nar
 | Lists matched notes | Weaves notes into a story |
 | Stays within KB content | Flags gaps and suggests filling them |
 
+## Saving the Synthesis
+
+After presenting the narrative, offer to save it:
+
+```
+Save this explanation as a synthesis note? (yes / no)
+```
+
+If yes, create a `type: synthesis` note in `notes/`:
+- Title: "Synthesis: [Topic]"
+- `type: synthesis`
+- `sources:` lists all notes used (as `../references/` paths or note slugs)
+- `related:` links to all atomic notes referenced
+- Body is the narrative with `[[wikilinks]]` preserved
+- Synthesis notes are **rewritable** — they can be regenerated from atomic notes at any time. The atomic notes remain the source of truth.
+
+This creates a persistent "executive summary" layer. When atomic notes are updated, the synthesis may become stale — flag with `valid_until` or regenerate.
+
 ## Rules
 
 - The narrative itself should only contain KB content — clearly separate what the KB says from what's missing
 - Don't silently fill gaps with Claude's own knowledge; flag them explicitly
 - If the KB has nothing on the topic, say so and suggest `/kb-question` to start building coverage
-- Don't create a new note — this is read-only unless the user asks to save the explanation
+- Synthesis notes are the only mutable note type — they can be regenerated from atomic notes
 
 ## Topic
 

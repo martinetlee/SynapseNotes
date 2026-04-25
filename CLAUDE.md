@@ -30,7 +30,7 @@ title: Note Title
 tags: [tag1, tag2]
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-type: question | concept | reference | insight
+type: question | concept | reference | insight | synthesis
 valid_from: YYYY-MM-DD    # when this information became true (optional)
 valid_until: null          # null = still valid; date = superseded/expired
 deprecated_by: null        # slug of superseding note, if any
@@ -49,6 +49,7 @@ related: []
 - **concept** — Explanation of a single concept: Definition + Details + Key Takeaways
 - **reference** — Extracted from external sources: Summary + Key Points + Source
 - **insight** — Original observations or connections: Observation + Analysis
+- **synthesis** — Generated narrative weaving multiple notes; rewritable (regenerate from atomic notes anytime)
 
 ## Rules for Writing Notes
 
@@ -60,6 +61,16 @@ related: []
 6. **Key Takeaways**: Always end with bullet-point takeaways for quick scanning.
 7. **Sources**: Frontmatter `sources` is a list of local reference file paths (e.g. `../references/filename.md`). These are the authoritative source pointers for the note.
 8. **Citations**: Always cite sources inline by linking to the local reference file: `[display text](../references/filename.md)`. The reference file itself contains the external URL. This keeps the KB self-contained and offline-verifiable. For sources not saved locally, use `[text](url)` as a fallback, but prefer saving substantive sources to `references/` first.
+
+## Session Log
+
+`.kb/log.md` is an append-only record of research sessions, notes created, and gaps identified. At the start of a session, read the last 20 entries for continuity. After any `/kb-research`, `/kb-ingest`, or significant infrastructure change, append a log entry with date, action type, what was done, notes created, and key findings.
+
+Format: `## [YYYY-MM-DD] type | Title` followed by bullet points.
+
+## Backup
+
+Run `.kb/backup.sh` to back up notes and references to `~/.kb-backups/`. Keeps last 10 timestamped backups.
 
 ## KB Role
 

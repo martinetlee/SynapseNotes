@@ -2,8 +2,9 @@
 """KB search index: build, query, and maintain.
 
 Usage:
-  python3 .kb/kb-index.py build                    # Build/rebuild index
-  python3 .kb/kb-index.py search "query text"      # Semantic search (top 10)
+  python3 .kb/kb-index.py build                    # Build/rebuild TF-IDF index
+  python3 .kb/kb-index.py build --embed            # Also build dense embeddings (needs API key)
+  python3 .kb/kb-index.py search "query text"      # Hybrid search (top 10)
   python3 .kb/kb-index.py search "query" --tags security,rag  # With tag filter
   python3 .kb/kb-index.py search "query" --type concept       # With type filter
   python3 .kb/kb-index.py similar note-slug         # Find similar notes
@@ -11,6 +12,10 @@ Usage:
   python3 .kb/kb-index.py contradictions note-slug  # Find potentially conflicting notes
   python3 .kb/kb-index.py coverage "topic"          # Check if KB covers a topic
   python3 .kb/kb-index.py stats                     # Index statistics
+  python3 .kb/kb-index.py clusters                  # Show topic clusters
+
+Dense embeddings require OPENAI_API_KEY or VOYAGE_API_KEY in environment.
+Falls back to TF-IDF-only when no API key is available.
 """
 import json
 import hashlib
@@ -32,7 +37,9 @@ INDEX_DIR = BASE / ".kb" / "index"
 INDEX_FILE = INDEX_DIR / "tfidf_index.json"
 VECTORS_FILE = INDEX_DIR / "tfidf_vectors.npz"
 VECTORIZER_FILE = INDEX_DIR / "vectorizer.pkl"
+EMBEDDINGS_FILE = INDEX_DIR / "dense_embeddings.npz"
 META_FILE = INDEX_DIR / "metadata.json"
+CLUSTERS_FILE = INDEX_DIR / "clusters.json"
 
 
 def parse_note(filepath):
@@ -142,8 +149,113 @@ def build_index():
     # Save metadata
     META_FILE.write_text(json.dumps(metadata, indent=2))
 
+    # Build topic clusters from tags
+    build_clusters(slugs, metadata)
+
     print(f"Index built: {len(slugs)} notes, {len(vectorizer.vocabulary_)} features")
     return tfidf_matrix, vectorizer, slugs, metadata
+
+
+def build_dense_embeddings(slugs, texts):
+    """Build dense embeddings via API (OpenAI or Voyage). Optional."""
+    import os
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VOYAGE_API_KEY")
+    if not api_key:
+        print("No API key found (OPENAI_API_KEY or VOYAGE_API_KEY). Skipping dense embeddings.")
+        return
+
+    provider = "voyage" if os.environ.get("VOYAGE_API_KEY") else "openai"
+
+    try:
+        if provider == "openai":
+            import urllib.request
+            embeddings = []
+            # Batch in groups of 20
+            for i in range(0, len(texts), 20):
+                batch = texts[i:i+20]
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/embeddings",
+                    data=json.dumps({"input": batch, "model": "text-embedding-3-small"}).encode(),
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req) as resp:
+                    result = json.loads(resp.read())
+                    for item in result["data"]:
+                        embeddings.append(item["embedding"])
+                print(f"  Embedded {min(i+20, len(texts))}/{len(texts)}")
+
+            np.savez_compressed(EMBEDDINGS_FILE,
+                                embeddings=np.array(embeddings),
+                                slugs=np.array(slugs))
+            print(f"Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims")
+
+        elif provider == "voyage":
+            import urllib.request
+            embeddings = []
+            for i in range(0, len(texts), 20):
+                batch = texts[i:i+20]
+                req = urllib.request.Request(
+                    "https://api.voyageai.com/v1/embeddings",
+                    data=json.dumps({"input": batch, "model": "voyage-3-lite"}).encode(),
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req) as resp:
+                    result = json.loads(resp.read())
+                    for item in result["data"]:
+                        embeddings.append(item["embedding"])
+                print(f"  Embedded {min(i+20, len(texts))}/{len(texts)}")
+
+            np.savez_compressed(EMBEDDINGS_FILE,
+                                embeddings=np.array(embeddings),
+                                slugs=np.array(slugs))
+            print(f"Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims")
+
+    except Exception as e:
+        print(f"Dense embedding failed: {e}")
+
+
+def build_clusters(slugs, metadata):
+    """Build topic clusters from tag co-occurrence for routing."""
+    tag_to_slugs = {}
+    slug_to_tags = {}
+    for slug in slugs:
+        meta = metadata.get(slug, {})
+        note_tags = meta.get("tags", [])
+        slug_to_tags[slug] = note_tags
+        for tag in note_tags:
+            if tag not in tag_to_slugs:
+                tag_to_slugs[tag] = []
+            tag_to_slugs[tag].append(slug)
+
+    # Identify major clusters (tags with 5+ notes)
+    major_tags = {t: slugs_list for t, slugs_list in tag_to_slugs.items() if len(slugs_list) >= 5}
+
+    # Merge overlapping clusters (if >60% of notes share two tags, they're one cluster)
+    clusters = {}
+    for tag, tag_slugs in sorted(major_tags.items(), key=lambda x: -len(x[1])):
+        tag_set = set(tag_slugs)
+        merged = False
+        for cname, cdata in clusters.items():
+            overlap = len(tag_set & cdata["slugs"]) / min(len(tag_set), len(cdata["slugs"]))
+            if overlap > 0.6:
+                cdata["slugs"] |= tag_set
+                cdata["tags"].append(tag)
+                merged = True
+                break
+        if not merged:
+            clusters[tag] = {"slugs": tag_set, "tags": [tag], "count": len(tag_slugs)}
+
+    # Finalize
+    result = {}
+    for primary_tag, cdata in clusters.items():
+        result[primary_tag] = {
+            "tags": cdata["tags"][:5],
+            "count": len(cdata["slugs"]),
+            "sample_notes": sorted(cdata["slugs"])[:5],
+        }
+
+    CLUSTERS_FILE.write_text(json.dumps(result, indent=2))
+    print(f"Clusters built: {len(result)} topic clusters")
 
 
 def load_index():
@@ -164,14 +276,73 @@ def load_index():
 
 
 def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
-    """Search notes by semantic similarity with optional metadata filtering."""
+    """Hybrid search: TF-IDF + dense embeddings (when available) with metadata filtering and topic weighting."""
     vectors, vectorizer, slugs, metadata = load_index()
 
-    # Transform query with same vectorizer
+    # TF-IDF similarity
     query_vec = vectorizer.transform([query]).toarray()
+    tfidf_sims = cosine_similarity(query_vec, vectors)[0]
 
-    # Compute similarities
-    sims = cosine_similarity(query_vec, vectors)[0]
+    # Dense embedding similarity (if available)
+    dense_sims = np.zeros_like(tfidf_sims)
+    has_dense = False
+    if EMBEDDINGS_FILE.exists():
+        try:
+            import os
+            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VOYAGE_API_KEY")
+            if api_key:
+                dense_npz = np.load(EMBEDDINGS_FILE)
+                dense_vecs = dense_npz["embeddings"]
+                # Embed query
+                provider = "voyage" if os.environ.get("VOYAGE_API_KEY") else "openai"
+                import urllib.request
+                url = "https://api.voyageai.com/v1/embeddings" if provider == "voyage" else "https://api.openai.com/v1/embeddings"
+                model = "voyage-3-lite" if provider == "voyage" else "text-embedding-3-small"
+                req = urllib.request.Request(url,
+                    data=json.dumps({"input": [query], "model": model}).encode(),
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+                with urllib.request.urlopen(req) as resp:
+                    result = json.loads(resp.read())
+                    q_emb = np.array(result["data"][0]["embedding"]).reshape(1, -1)
+                dense_sims = cosine_similarity(q_emb, dense_vecs)[0]
+                has_dense = True
+        except Exception:
+            pass
+
+    # Hybrid fusion: RRF (Reciprocal Rank Fusion) when both available, else TF-IDF only
+    if has_dense:
+        k_rrf = 60  # RRF constant
+        tfidf_ranks = np.argsort(-tfidf_sims)
+        dense_ranks = np.argsort(-dense_sims)
+        rrf_scores = np.zeros(len(slugs))
+        for rank, idx in enumerate(tfidf_ranks):
+            rrf_scores[idx] += 1.0 / (k_rrf + rank)
+        for rank, idx in enumerate(dense_ranks):
+            rrf_scores[idx] += 1.0 / (k_rrf + rank)
+        sims = rrf_scores
+    else:
+        sims = tfidf_sims
+
+    # Topic weighting: boost underrepresented topic clusters
+    if CLUSTERS_FILE.exists():
+        try:
+            clusters = json.loads(CLUSTERS_FILE.read_text())
+            cluster_sizes = {t: c["count"] for t, c in clusters.items()}
+            max_cluster = max(cluster_sizes.values()) if cluster_sizes else 1
+            for i, slug in enumerate(slugs):
+                meta = metadata.get(slug, {})
+                note_tags = meta.get("tags", [])
+                # Find the largest cluster this note belongs to
+                largest_cluster = 0
+                for t in note_tags:
+                    if t in cluster_sizes:
+                        largest_cluster = max(largest_cluster, cluster_sizes[t])
+                if largest_cluster > 0:
+                    # Boost notes from smaller clusters (inverse log scale)
+                    boost = 1.0 + 0.15 * (1 - largest_cluster / max_cluster)
+                    sims[i] *= boost
+        except Exception:
+            pass
 
     # Apply metadata filters
     for i, slug in enumerate(slugs):
@@ -360,9 +531,11 @@ def stats():
             deprecated += 1
 
     print(f"Notes: {len(metadata)}")
-    print(f"Features: {len(index_data['vocabulary'])}")
+    print(f"Features: {index_data.get('feature_count', 'unknown')}")
     print(f"Total words: {total_words:,}")
     print(f"Deprecated: {deprecated}")
+    print(f"Dense embeddings: {'yes' if EMBEDDINGS_FILE.exists() else 'no (TF-IDF only)'}")
+    print(f"Topic clusters: {len(json.loads(CLUSTERS_FILE.read_text())) if CLUSTERS_FILE.exists() else 0}")
     print(f"Types: {json.dumps(types, indent=2)}")
     print(f"Top tags: {json.dumps(dict(sorted(all_tags.items(), key=lambda x: -x[1])[:20]), indent=2)}")
 
@@ -375,7 +548,18 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
 
     if cmd == "build":
-        build_index()
+        result = build_index()
+        if "--embed" in sys.argv:
+            if result:
+                _, _, slugs, _ = result[0] if isinstance(result, list) else (None, None, None, None)
+            # Re-read texts for embedding
+            notes_list = sorted(NOTES.glob("*.md"))
+            slugs = [p.stem for p in notes_list]
+            texts = []
+            for p in notes_list:
+                fm, body, _ = parse_note(p)
+                texts.append(extract_contextual_text(fm, body))
+            build_dense_embeddings(slugs, texts)
 
     elif cmd == "search":
         if len(sys.argv) < 3:
@@ -429,6 +613,17 @@ if __name__ == "__main__":
             print("Relevant notes:")
             for n in result["notes"]:
                 print(f"  {n['score']:.4f}  {n['slug']}")
+
+    elif cmd == "clusters":
+        if not CLUSTERS_FILE.exists():
+            print("No clusters. Run: python3 .kb/kb-index.py build")
+            sys.exit(1)
+        clusters = json.loads(CLUSTERS_FILE.read_text())
+        print(f"Topic clusters ({len(clusters)}):")
+        for tag, data in sorted(clusters.items(), key=lambda x: -x[1]["count"]):
+            print(f"  {tag} ({data['count']} notes)")
+            print(f"    tags: {', '.join(data['tags'][:5])}")
+            print(f"    sample: {', '.join(data['sample_notes'][:3])}")
 
     elif cmd == "stats":
         stats()
