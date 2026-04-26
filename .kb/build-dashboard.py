@@ -971,6 +971,242 @@ def build_research_gaps_html():
     return "\n".join(parts)
 
 
+def build_bridge_concepts_html(graph_data, metadata, topic_data):
+    """Build styled card list of bridge notes that connect different graph clusters."""
+    try:
+        bridges = kb.graph_bridges()
+    except Exception:
+        bridges = []
+
+    if not bridges:
+        return '<p class="empty">No bridge notes found — the graph is either fully connected or fully disconnected.</p>'
+
+    adj = graph_data.get("adjacency", {})
+
+    # Enrich each bridge with metadata and cluster info
+    enriched = []
+    for b in bridges:
+        slug = b["slug"]
+        meta = metadata.get(slug, {})
+        degree = len(adj.get(slug, {}).get("outgoing", [])) + len(adj.get(slug, {}).get("incoming", []))
+        neighbors = set(adj.get(slug, {}).get("outgoing", []) + adj.get(slug, {}).get("incoming", []))
+
+        # Determine which clusters this bridge connects by looking at neighbors' primary tags
+        neighbor_clusters = set()
+        for nb in neighbors:
+            nb_meta = metadata.get(nb, {})
+            nb_tags = nb_meta.get("tags", [])
+            for tag in nb_tags:
+                if tag in topic_data:
+                    neighbor_clusters.add(tag)
+                    break  # use first matching cluster tag per neighbor
+
+        title = meta.get("title", slug)
+        ntype = meta.get("type", "unknown")
+        tags = meta.get("tags", [])
+
+        enriched.append({
+            "slug": slug,
+            "title": title,
+            "type": ntype,
+            "tags": tags,
+            "degree": degree,
+            "clusters": sorted(neighbor_clusters),
+        })
+
+    # Sort by degree descending, limit to top 15
+    enriched.sort(key=lambda x: -x["degree"])
+    enriched = enriched[:15]
+
+    cards = []
+    for item in enriched:
+        type_color = TYPE_COLORS.get(item["type"], "#6b7280")
+        if len(item["clusters"]) >= 2:
+            bridges_label = " &lt;-&gt; ".join(escape(c) for c in item["clusters"])
+        elif len(item["clusters"]) == 1:
+            bridges_label = escape(item["clusters"][0])
+        else:
+            bridges_label = "unknown clusters"
+
+        cards.append(
+            f'<div class="bridge-card">'
+            f'<div class="bridge-card-title">{escape(item["title"])}</div>'
+            f'<div class="bridge-card-meta">'
+            f'<span class="bridge-type-badge" style="background:{type_color};">{escape(item["type"])}</span>'
+            f'<span class="bridge-degree">{item["degree"]} links</span>'
+            f'</div>'
+            f'<div class="bridge-clusters">Bridges: {bridges_label}</div>'
+            f'</div>'
+        )
+
+    return f'<div class="bridge-cards">{"".join(cards)}</div>'
+
+
+def build_tag_cooccurrence_html(metadata):
+    """Build D3 force-directed graph of tag co-occurrences."""
+    if not metadata:
+        return '<p class="empty">No metadata available for tag co-occurrence analysis.</p>'
+
+    # Count tag usage and co-occurrences
+    tag_counts = defaultdict(int)
+    cooccurrence = defaultdict(int)
+
+    for slug, meta in metadata.items():
+        tags = meta.get("tags", [])
+        for tag in tags:
+            tag_counts[tag] += 1
+        # For every pair of tags on the same note, increment co-occurrence
+        for i in range(len(tags)):
+            for j in range(i + 1, len(tags)):
+                pair = tuple(sorted([tags[i], tags[j]]))
+                cooccurrence[pair] += 1
+
+    # Filter: tags with 3+ notes
+    valid_tags = {tag for tag, count in tag_counts.items() if count >= 3}
+    if len(valid_tags) < 2:
+        return '<p class="empty">Not enough tags with 3+ notes for co-occurrence analysis.</p>'
+
+    # Filter: co-occurrences with 2+ shared notes, both tags valid
+    edges = []
+    for (t1, t2), count in cooccurrence.items():
+        if count >= 2 and t1 in valid_tags and t2 in valid_tags:
+            edges.append({"source": t1, "target": t2, "weight": count})
+
+    if not edges:
+        return '<p class="empty">No tag pairs with 2+ co-occurrences found.</p>'
+
+    # Only include tags that appear in at least one edge
+    connected_tags = set()
+    for e in edges:
+        connected_tags.add(e["source"])
+        connected_tags.add(e["target"])
+
+    nodes = []
+    for tag in sorted(connected_tags):
+        nodes.append({"id": tag, "count": tag_counts[tag]})
+
+    max_weight = max(e["weight"] for e in edges)
+
+    graph_json = json.dumps({"nodes": nodes, "edges": edges, "max_weight": max_weight})
+
+    return f"""<div id="tag-cooccurrence-container" style="width:100%;max-width:600px;height:400px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface);position:relative;"></div>
+<script>
+(function() {{
+  var data2 = {graph_json};
+  var container2 = document.getElementById('tag-cooccurrence-container');
+  var w2 = 600, h2 = 400;
+
+  var svg2 = d3.select(container2).append('svg')
+    .attr('width', w2).attr('height', h2)
+    .call(d3.zoom().scaleExtent([0.5, 4]).on('zoom', function(e) {{
+      g2.attr('transform', e.transform);
+    }}));
+
+  var g2 = svg2.append('g');
+
+  var tooltip2 = d3.select(container2).append('div')
+    .style('position', 'absolute').style('pointer-events', 'none')
+    .style('background', 'rgba(0,0,0,0.85)').style('color', '#fff')
+    .style('padding', '6px 10px').style('border-radius', '4px')
+    .style('font-size', '12px').style('opacity', 0).style('z-index', 10);
+
+  // Color by simple hash
+  function tagColor(s) {{
+    var hash = 0;
+    for (var i = 0; i < s.length; i++) hash = s.charCodeAt(i) + ((hash << 5) - hash);
+    var hue = ((hash % 360) + 360) % 360;
+    return 'hsl(' + hue + ', 55%, 50%)';
+  }}
+
+  var maxCount = d3.max(data2.nodes, function(d) {{ return d.count; }}) || 1;
+
+  var sim2 = d3.forceSimulation(data2.nodes)
+    .force('link', d3.forceLink(data2.edges).id(function(d){{ return d.id; }}).distance(60))
+    .force('charge', d3.forceManyBody().strength(-80))
+    .force('center', d3.forceCenter(w2/2, h2/2))
+    .force('collide', d3.forceCollide().radius(function(d){{ return Math.sqrt(d.count / maxCount) * 20 + 8; }}));
+
+  var link2 = g2.append('g').selectAll('line')
+    .data(data2.edges).join('line')
+    .attr('stroke', 'var(--muted)')
+    .attr('stroke-width', function(d){{ return Math.max(1, d.weight / data2.max_weight * 6); }})
+    .attr('stroke-opacity', function(d){{ return 0.2 + 0.6 * d.weight / data2.max_weight; }});
+
+  var node2 = g2.append('g').selectAll('circle')
+    .data(data2.nodes).join('circle')
+    .attr('r', function(d){{ return Math.max(6, Math.sqrt(d.count / maxCount) * 20); }})
+    .attr('fill', function(d){{ return tagColor(d.id); }})
+    .attr('stroke', 'var(--bg)').attr('stroke-width', 1.5)
+    .style('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', function(e,d){{ if(!e.active) sim2.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }})
+      .on('drag', function(e,d){{ d.fx=e.x; d.fy=e.y; }})
+      .on('end', function(e,d){{ if(!e.active) sim2.alphaTarget(0); d.fx=null; d.fy=null; }}));
+
+  var labels2 = g2.append('g').selectAll('text')
+    .data(data2.nodes).join('text')
+    .text(function(d){{ return d.id; }})
+    .attr('fill', 'var(--text)').attr('font-size', '9px')
+    .attr('text-anchor', 'middle').attr('dy', '0.35em')
+    .attr('pointer-events', 'none');
+
+  node2.on('mouseover', function(e,d) {{
+    tooltip2.style('opacity',1)
+      .html('<strong>'+d.id+'</strong><br>Notes: '+d.count)
+      .style('left', (e.offsetX+12)+'px').style('top', (e.offsetY-10)+'px');
+  }}).on('mouseout', function() {{ tooltip2.style('opacity',0); }});
+
+  node2.on('click', function(e, d) {{
+    var connected2 = new Set();
+    var edgeWeights = {{}};
+    data2.edges.forEach(function(e) {{
+      var sid = typeof e.source === 'object' ? e.source.id : e.source;
+      var tid = typeof e.target === 'object' ? e.target.id : e.target;
+      if (sid === d.id) {{ connected2.add(tid); edgeWeights[tid] = e.weight; }}
+      if (tid === d.id) {{ connected2.add(sid); edgeWeights[sid] = e.weight; }}
+    }});
+    connected2.add(d.id);
+
+    node2.attr('opacity', function(n) {{ return connected2.has(n.id) ? 1 : 0.15; }});
+    link2.attr('stroke-opacity', function(l) {{
+      var sid = typeof l.source === 'object' ? l.source.id : l.source;
+      var tid = typeof l.target === 'object' ? l.target.id : l.target;
+      return (sid === d.id || tid === d.id) ? 0.9 : 0.03;
+    }});
+    labels2.attr('opacity', function(n) {{ return connected2.has(n.id) ? 1 : 0.1; }});
+
+    // Update tooltip to show edge weights
+    var info = '<strong>'+d.id+'</strong> ('+d.count+' notes)<br>';
+    connected2.forEach(function(t) {{
+      if (t !== d.id && edgeWeights[t]) info += t + ': ' + edgeWeights[t] + ' shared<br>';
+    }});
+    tooltip2.style('opacity',1).html(info)
+      .style('left', (e.offsetX+12)+'px').style('top', (e.offsetY-10)+'px');
+  }});
+
+  svg2.on('click', function(e) {{
+    if (e.target.tagName !== 'circle') {{
+      node2.attr('opacity', 1);
+      link2.attr('stroke-opacity', function(d){{ return 0.2 + 0.6 * d.weight / data2.max_weight; }});
+      labels2.attr('opacity', 1);
+      tooltip2.style('opacity', 0);
+    }}
+  }});
+
+  sim2.on('tick', function() {{
+    link2.attr('x1', function(d){{ return d.source.x; }})
+        .attr('y1', function(d){{ return d.source.y; }})
+        .attr('x2', function(d){{ return d.target.x; }})
+        .attr('y2', function(d){{ return d.target.y; }});
+    node2.attr('cx', function(d){{ return d.x; }})
+        .attr('cy', function(d){{ return d.y; }});
+    labels2.attr('x', function(d){{ return d.x; }})
+        .attr('y', function(d){{ return d.y; }});
+  }});
+}})();
+</script>"""
+
+
 def build_dashboard():
     """Build the full dashboard HTML."""
     topic_data = load_topic_map()
@@ -998,6 +1234,8 @@ def build_dashboard():
     gap_burden_html = build_gap_burden_html()
     retrieval_heatmap_html = build_retrieval_heatmap_html()
     research_gaps_html = build_research_gaps_html()
+    bridge_concepts_html = build_bridge_concepts_html(graph_data, all_metadata, topic_data)
+    tag_cooccurrence_html = build_tag_cooccurrence_html(all_metadata)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1378,6 +1616,49 @@ body {{
   margin-right: 8px;
 }}
 
+/* Bridge Concept Cards */
+.bridge-cards {{
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}}
+.bridge-card {{
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px 16px;
+  background: var(--surface);
+}}
+.bridge-card-title {{
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 6px;
+}}
+.bridge-card-meta {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}}
+.bridge-type-badge {{
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}}
+.bridge-degree {{
+  font-size: 12px;
+  color: var(--muted);
+}}
+.bridge-clusters {{
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}}
+
 .empty {{
   color: var(--muted);
   font-style: italic;
@@ -1451,6 +1732,18 @@ body {{
     <h2>Coverage Radar</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Top topic clusters compared across four axes: note count, link density, type diversity, and freshness (how recently updated).</p>
     {coverage_radar_html}
+  </div>
+
+  <div class="section">
+    <h2>Bridge Concepts</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Bridge notes are cross-domain connectors whose removal would disconnect parts of the knowledge graph. Sorted by link count.</p>
+    {bridge_concepts_html}
+  </div>
+
+  <div class="section">
+    <h2>Tag Co-occurrence Network</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Tags that frequently appear together on the same notes. Node size reflects total notes with that tag; edge thickness reflects co-occurrence count. Click a tag to highlight its connections.</p>
+    {tag_cooccurrence_html}
   </div>
 </div>
 
