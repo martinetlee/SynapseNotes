@@ -1051,10 +1051,15 @@ def lint_all(target_slug=None, kb_name=None):
 def auto_backlink(target_slugs=None, kb_name=None):
     """Scan notes for outgoing [[wikilinks]] and add missing reverse links.
 
+    Handles both same-KB and cross-KB links:
+    - [[slug]] links are resolved within the same KB
+    - [[other-kb:slug]] links are resolved in the target KB, and the
+      reverse link uses [[source-kb:slug]] syntax
+
     If kb_name is specified, operate on that KB only.
     If kb_name is None, operate on all KBs.
     If target_slugs is provided, only process those notes.
-    Returns list of (source, target, action) tuples.
+    Returns list of (source_kb:slug, target_kb:slug, action) tuples.
     """
     reg = get_registry()
     if kb_name:
@@ -1062,41 +1067,79 @@ def auto_backlink(target_slugs=None, kb_name=None):
     else:
         kbs_to_scan = reg.all_kbs()
 
+    # Build a global map: kb_name → {slug → path}
+    all_kb_notes = {}
+    for kbc in reg.all_kbs():
+        if kbc.notes_dir.exists():
+            all_kb_notes[kbc.name] = {p.stem: p for p in sorted(kbc.notes_dir.glob("*.md"))}
+        else:
+            all_kb_notes[kbc.name] = {}
+
     changes = []
 
     for kb in kbs_to_scan:
         if not kb.notes_dir.exists():
             continue
 
-        all_notes = {p.stem: p for p in sorted(kb.notes_dir.glob("*.md"))}
+        local_notes = all_kb_notes.get(kb.name, {})
 
         if target_slugs:
-            notes_to_scan = {s: all_notes[s] for s in target_slugs if s in all_notes}
+            notes_to_scan = {s: local_notes[s] for s in target_slugs if s in local_notes}
         else:
-            notes_to_scan = all_notes
+            notes_to_scan = local_notes
 
         for slug, path in notes_to_scan.items():
             fm, body, _ = parse_note(path)
-            outgoing = set(extract_wikilink_slugs(body))
-            for r in fm.get("related", []):
-                outgoing.update(extract_wikilink_slugs(str(r)))
 
-            for target in outgoing:
-                if target == slug or target not in all_notes:
+            # Extract wikilinks with KB context: (kb_part_or_none, target_slug)
+            outgoing = extract_wikilinks(body)
+            for r in fm.get("related", []):
+                outgoing.extend(extract_wikilinks(str(r)))
+
+            for link_kb, target_slug in outgoing:
+                if target_slug == slug and not link_kb:
                     continue
 
-                target_path = all_notes[target]
-                target_fm, target_body, _ = parse_note(target_path)
-                target_related = target_fm.get("related", [])
-                target_links = set()
-                for r in target_related:
-                    target_links.update(extract_wikilink_slugs(str(r)))
+                # Determine which KB the target lives in
+                if link_kb:
+                    # Explicit cross-KB link: [[other-kb:slug]]
+                    target_kb_name = link_kb
+                else:
+                    # Same-KB link: [[slug]]
+                    target_kb_name = kb.name
 
-                if slug not in target_links:
-                    target_related.append(f"[[{slug}]]")
-                    target_fm["related"] = target_related
-                    _rewrite_frontmatter(target_path, target_fm)
-                    changes.append((slug, target, "added backlink"))
+                target_notes = all_kb_notes.get(target_kb_name, {})
+                if target_slug not in target_notes:
+                    continue
+
+                # Check if target already has a backlink to this note
+                target_path = target_notes[target_slug]
+                target_fm, _, _ = parse_note(target_path)
+                target_related = target_fm.get("related", [])
+                existing_backlinks = set()
+                for r in target_related:
+                    for bk_kb, bk_slug in extract_wikilinks(str(r)):
+                        if bk_kb:
+                            existing_backlinks.add(f"{bk_kb}:{bk_slug}")
+                        else:
+                            existing_backlinks.add(bk_slug)
+
+                # Determine the backlink format
+                if target_kb_name == kb.name:
+                    # Same KB: plain [[slug]]
+                    if slug not in existing_backlinks:
+                        target_related.append(f"[[{slug}]]")
+                        target_fm["related"] = target_related
+                        _rewrite_frontmatter(target_path, target_fm)
+                        changes.append((f"{kb.name}:{slug}", f"{target_kb_name}:{target_slug}", "added backlink"))
+                else:
+                    # Cross-KB: [[source-kb:slug]]
+                    backlink_key = f"{kb.name}:{slug}"
+                    if backlink_key not in existing_backlinks:
+                        target_related.append(f"[[{kb.name}:{slug}]]")
+                        target_fm["related"] = target_related
+                        _rewrite_frontmatter(target_path, target_fm)
+                        changes.append((f"{kb.name}:{slug}", f"{target_kb_name}:{target_slug}", "added cross-KB backlink"))
 
     return changes
 
