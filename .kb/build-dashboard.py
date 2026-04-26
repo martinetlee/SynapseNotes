@@ -438,7 +438,13 @@ def build_link_graph_html(graph_data, metadata, topic_data, cluster_colors):
       .style('left', (e.offsetX+12)+'px').style('top', (e.offsetY-10)+'px');
   }}).on('mouseout', function() {{ tooltip.style('opacity',0); }});
 
+  // Labels group (for persistent labels on click)
+  var labels = g.append('g');
+
   node.on('click', function(e, d) {{
+    // Remove old labels
+    labels.selectAll('text').remove();
+
     var connected = new Set();
     data.edges.forEach(function(e) {{
       var sid = typeof e.source === 'object' ? e.source.id : e.source;
@@ -453,6 +459,14 @@ def build_link_graph_html(graph_data, metadata, topic_data, cluster_colors):
       var tid = typeof l.target === 'object' ? l.target.id : l.target;
       return (sid === d.id || tid === d.id) ? 0.8 : 0.03;
     }});
+
+    // Show title labels on clicked node and its neighbors
+    var labelData = data.nodes.filter(function(n) {{ return connected.has(n.id); }});
+    labels.selectAll('text').data(labelData, function(n){{ return n.id; }}).join('text')
+      .attr('x', function(n){{ return n.x + Math.max(4, Math.sqrt(n.degree)*2) + 4; }})
+      .attr('y', function(n){{ return n.y + 4; }})
+      .text(function(n){{ return n.title; }})
+      .attr('fill', 'var(--text)').attr('font-size', '10px').attr('pointer-events', 'none');
   }});
 
   svg.on('click', function(e) {{
@@ -469,6 +483,9 @@ def build_link_graph_html(graph_data, metadata, topic_data, cluster_colors):
         .attr('y2', function(d){{ return d.target.y; }});
     node.attr('cx', function(d){{ return d.x; }})
         .attr('cy', function(d){{ return d.y; }});
+    labels.selectAll('text')
+        .attr('x', function(d){{ return d.x + Math.max(4, Math.sqrt(d.degree)*2) + 4; }})
+        .attr('y', function(d){{ return d.y + 4; }});
   }});
 }})();
 </script>"""
@@ -488,20 +505,42 @@ def build_notes_over_time_html(metadata):
     }
     type_order = ["concept", "insight", "question", "reference", "synthesis"]
 
-    # Group by month and type
+    # Group by date bucket and type
+    # Use daily buckets if date range < 90 days, otherwise monthly
+    all_dates = []
+    for slug, meta in metadata.items():
+        created = meta.get("created", "")
+        if created and len(created) >= 10:
+            all_dates.append(created[:10])
+        elif created and len(created) >= 7:
+            all_dates.append(created[:7] + "-01")
+
+    if not all_dates:
+        return '<p class="empty">No date data in metadata.</p>'
+
+    all_dates.sort()
+    try:
+        first = datetime.strptime(all_dates[0], "%Y-%m-%d").date()
+        last = datetime.strptime(all_dates[-1], "%Y-%m-%d").date()
+        span_days = (last - first).days
+    except ValueError:
+        span_days = 365
+
+    use_daily = span_days < 90
+
     monthly = defaultdict(lambda: defaultdict(int))
     for slug, meta in metadata.items():
         created = meta.get("created", "")
         if not created or len(created) < 7:
             continue
-        month = created[:7]  # YYYY-MM
+        if use_daily and len(created) >= 10:
+            bucket = created[:10]  # YYYY-MM-DD
+        else:
+            bucket = created[:7]  # YYYY-MM
         ntype = meta.get("type", "unknown")
         if ntype not in type_colors:
-            ntype = "synthesis"  # fallback
-        monthly[month][ntype] += 1
-
-    if not monthly:
-        return '<p class="empty">No date data in metadata.</p>'
+            ntype = "synthesis"
+        monthly[bucket][ntype] += 1
 
     months = sorted(monthly.keys())
 
@@ -623,8 +662,8 @@ def build_coverage_radar_html(topic_data, metadata):
             raw[t][axis_idx] = (raw[t][axis_idx] - vmin) / rng
 
     # SVG radar
-    cx, cy, r = 200, 200, 150
-    w, h = 450, 420
+    cx, cy, r = 220, 220, 170
+    w, h = 500, 480
 
     svg = [f'<svg viewBox="0 0 {w} {h}" style="width:100%;max-width:{w}px;height:auto;" xmlns="http://www.w3.org/2000/svg">']
 
@@ -654,7 +693,7 @@ def build_coverage_radar_html(topic_data, metadata):
             points.append(f"{px:.1f},{py:.1f}")
         svg.append(f'<polygon points="{" ".join(points)}" fill="none" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3,3" />')
 
-    # Draw polygon for each cluster
+    # Draw polygon for each cluster (with data-tag attribute for toggling)
     cluster_colors_radar = CLUSTER_COLORS[:len(sorted_tags)]
     for cidx, tag in enumerate(sorted_tags):
         vals = raw[tag]
@@ -666,18 +705,33 @@ def build_coverage_radar_html(topic_data, metadata):
             py = cy + r * v * math.sin(angle)
             points.append(f"{px:.1f},{py:.1f}")
         color = cluster_colors_radar[cidx]
-        svg.append(f'<polygon points="{" ".join(points)}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="1.5" />')
+        safe_tag = escape(tag).replace('"', '&quot;')
+        svg.append(f'<polygon data-radar-tag="{safe_tag}" points="{" ".join(points)}" fill="{color}" fill-opacity="0.15" stroke="{color}" stroke-width="2" />')
 
     svg.append('</svg>')
 
-    # Legend for clusters
-    legend_parts = []
+    # Interactive toggle checkboxes
+    toggle_parts = []
     for cidx, tag in enumerate(sorted_tags):
         color = cluster_colors_radar[cidx]
-        legend_parts.append(f'<span class="legend-item"><span class="legend-dot" style="background:{color}"></span>{escape(tag)}</span>')
-    legend = " ".join(legend_parts)
+        safe_tag = escape(tag).replace('"', '&quot;')
+        toggle_parts.append(
+            f'<label style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;cursor:pointer;font-size:13px;">'
+            f'<input type="checkbox" checked onchange="toggleRadar(this, \'{safe_tag}\')" '
+            f'style="accent-color:{color};">'
+            f'<span style="color:{color};font-weight:600;">{escape(tag)}</span></label>'
+        )
+    toggles = "\n".join(toggle_parts)
 
-    return "\n".join(svg) + f'\n<div class="type-legend" style="margin-top:8px;">{legend}</div>'
+    script = """
+<script>
+function toggleRadar(cb, tag) {
+  var polys = document.querySelectorAll('polygon[data-radar-tag="' + tag + '"]');
+  polys.forEach(function(p) { p.style.display = cb.checked ? '' : 'none'; });
+}
+</script>"""
+
+    return "\n".join(svg) + f'\n<div style="margin-top:12px;">{toggles}</div>' + script
 
 
 def build_research_depth_html(metadata):
