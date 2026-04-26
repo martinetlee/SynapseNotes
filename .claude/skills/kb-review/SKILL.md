@@ -15,6 +15,18 @@ Audit the knowledge base for quality issues and suggest improvements.
 
 2. **Run checks** — Perform all of the following (or only the focused area if $ARGUMENTS specifies one):
 
+   ### Lint
+   - Run `python3 .kb/kb-index.py lint` to validate all notes for frontmatter errors, broken wikilinks, broken citations, unknown tags, and malformed dates.
+   - Present errors (must-fix) and warnings (should-fix) separately.
+
+   ### Link Graph
+   - Run `python3 .kb/kb-index.py graph orphans` to find disconnected notes.
+   - Run `python3 .kb/kb-index.py graph components` to identify disconnected subgraphs that should be linked.
+   - Run `python3 .kb/kb-index.py graph bridges` to identify critical connector notes.
+
+   ### Synthesis Staleness
+   - Run `python3 .kb/kb-index.py stale-syntheses` to find synthesis notes whose dependencies have changed since the synthesis was generated. Suggest regenerating via `/kb-explain`.
+
    ### Tag Sprawl
    - Find similar/redundant tags (e.g. `js` and `javascript`, `ml` and `machine-learning`)
    - Find tags used only once (may be too specific)
@@ -51,6 +63,12 @@ Audit the knowledge base for quality issues and suggest improvements.
    - Notes with `valid_until` date in the past (expired knowledge)
    - Notes with `deprecated_by` set (superseded)
    - Run `python3 .kb/kb-index.py stale` to find candidates
+
+   ### Note Size
+   - Target range: **400-700 words** per note (empirically validated sweet spot for RAG retrieval)
+   - Flag notes **under 300 words** — may be too thin for useful retrieval; suggest merging with a related note or expanding
+   - Flag notes **over 900 words** — may cover multiple concepts; suggest splitting into separate atomic notes
+   - Check via word count of body text (after frontmatter)
 
    ### Retrieval Quality
    - Run `python3 .kb/kb-index.py stats` for index health

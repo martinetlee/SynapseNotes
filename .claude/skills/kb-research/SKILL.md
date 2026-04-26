@@ -152,7 +152,7 @@ After all questions are researched:
    d. **Cite all sources inline via local reference files** — every claim must trace back to `[display text](../references/filename.md)`. The reference file contains the external URL. Never cite external URLs directly in notes if a reference file exists for that source.
    e. Add `[[wikilinks]]` to the research hub and related notes, in both directions
    f. **Define terms inline** — on first use of a technical term not commonly known, add a brief parenthetical definition. Link to a concept note via wikilink only if one exists.
-   g. **Rebuild index**: After creating all notes, run `python3 .kb/kb-index.py build` to update the search index.
+   g. **Rebuild index**: After creating all notes, run `python3 .kb/kb-index.py build --incremental` to update the search index (only re-indexes changed notes).
 
 5. **Create research hub note** — A `reference`-type note that:
    - Summarizes the research topic and key findings

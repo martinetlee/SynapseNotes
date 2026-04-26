@@ -8,11 +8,11 @@ A Claude-powered knowledge base using Obsidian-compatible markdown notes.
 notes/           — All atomic notes (flat, one concept per file)
 references/      — Source material for ingestion (READ-ONLY — never modify)
 publish/         — Generated HTML reports for sharing
-.kb/config.yaml  — KB settings
+.kb/config.yaml  — KB settings and all tunable thresholds
 .kb/taxonomy.yaml — Loose tag registry (descriptive, not prescriptive)
-.kb/index/       — Search index (TF-IDF vectors, metadata cache)
-.kb/build-report.py  — HTML report builder
-.kb/kb-index.py  — Search index builder and query engine
+.kb/index/       — Search index (TF-IDF vectors, metadata, link graph)
+.kb/build-report.py  — HTML report builder (uses python-markdown)
+.kb/kb-index.py  — Search index, linter, link graph, and query engine
 .claude/skills/  — Claude Code skill definitions
 ```
 
@@ -34,6 +34,7 @@ type: question | concept | reference | insight | synthesis
 valid_from: YYYY-MM-DD    # when this information became true (optional)
 valid_until: null          # null = still valid; date = superseded/expired
 deprecated_by: null        # slug of superseding note, if any
+depends_on: []             # for synthesis notes only: list of atomic note slugs this depends on
 sources: []
 related: []
 ---
@@ -49,7 +50,7 @@ related: []
 - **concept** — Explanation of a single concept: Definition + Details + Key Takeaways
 - **reference** — Extracted from external sources: Summary + Key Points + Source
 - **insight** — Original observations or connections: Observation + Analysis
-- **synthesis** — Generated narrative weaving multiple notes; rewritable (regenerate from atomic notes anytime)
+- **synthesis** — Generated narrative weaving multiple notes; rewritable (regenerate from atomic notes anytime). Must include `depends_on:` listing all atomic note slugs used, enabling staleness detection via `kb-index.py stale-syntheses`.
 
 ## Rules for Writing Notes
 
@@ -67,6 +68,67 @@ related: []
 `.kb/log.md` is an append-only record of research sessions, notes created, and gaps identified. At the start of a session, read the last 20 entries for continuity. After any `/kb-research`, `/kb-ingest`, or significant infrastructure change, append a log entry with date, action type, what was done, notes created, and key findings.
 
 Format: `## [YYYY-MM-DD] type | Title` followed by bullet points.
+
+## Infrastructure Commands
+
+All commands via `python3 .kb/kb-index.py <command>`:
+
+| Command | Purpose |
+|---|---|
+| `build` | Full index rebuild (TF-IDF + clusters + link graph) |
+| `build --incremental` | Only re-index changed notes (compares content hashes) |
+| `build --embed` | Also build dense embeddings |
+| `search "query"` | Hybrid search with optional `--tags`, `--type` filters |
+| `similar <slug>` | Find notes similar to a given note |
+| `coverage "topic"` | Check if KB covers a topic |
+| `contradictions <slug>` | Find potentially conflicting notes |
+| `stale [days]` | Find temporally stale notes |
+| `stale-syntheses` | Find synthesis notes with updated dependencies |
+| `stats` | Index statistics with type distribution |
+| `clusters` | Show topic clusters |
+| `lint [slug]` | Validate notes (frontmatter, links, citations, tags) |
+| `graph` | Link graph summary |
+| `graph orphans` | Notes with no links in or out |
+| `graph components` | Disconnected subgraphs |
+| `graph neighbors <slug> [n]` | Notes within n hops |
+| `graph bridges` | Critical connector notes |
+| `quick "query"` | Fast title/slug/tag match (no TF-IDF) |
+| `backlink [slug]` | Add missing reverse wikilinks |
+| `feedback summary` | Show accumulated search feedback |
+| `feedback log "q" "type" "slugs"` | Log a search quality issue |
+| `map` | Topic map with coverage and link density |
+| `explore <slug> [steps]` | Suggested reading path from a note |
+| `gaps` | Find thin/weak topic areas |
+| `eval` | Run retrieval evaluation (Recall@5, MRR, nDCG@5) |
+| `eval generation` | Run faithfulness + relevancy checks (requires OPENAI_API_KEY) |
+| `eval all --verbose` | Run all evaluations with per-query detail |
+
+## MCP Server
+
+The KB exposes a read-only MCP server for external tools (Claude Code from other projects, Cursor, etc.).
+
+**Start:** `uv run --directory .kb python mcp_server.py`
+
+**Tools:** `kb_search`, `kb_quick`, `kb_read`, `kb_map`, `kb_explore`, `kb_gaps`, `kb_stats`, `kb_coverage`
+
+**Configure in Claude Code** (add to `~/.claude/settings.json` under `mcpServers`):
+```json
+{
+  "mcpServers": {
+    "knowledge-base": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/martinetlee/Project/Personal/KnowledgeBase/.kb", "python", "mcp_server.py"],
+      "env": {}
+    }
+  }
+}
+```
+
+The server auto-rebuilds the index if notes have changed since the last build (checks every 30s).
+
+## Configuration
+
+`.kb/config.yaml` contains all tunable thresholds for search, coverage, similarity, clustering, staleness, and indexing. Skills read from this config — do not hard-code thresholds in skill prompts or scripts.
 
 ## Backup
 

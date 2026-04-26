@@ -9,3 +9,9 @@ publish/*
 .DS_Store
 *.canvas
 Untitled.canvas
+__pycache__/
+.kb/__pycache__/
+.kb/log.md
+.kb/taxonomy.yaml
+.kb/index/feedback.jsonl
+tests/*_results.json

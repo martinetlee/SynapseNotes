@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import yaml
+import markdown
 from datetime import date
 from pathlib import Path
 
@@ -18,6 +19,18 @@ NOTES = BASE / "notes"
 REFS = BASE / "references"
 TEMPLATE = BASE / ".kb" / "templates" / "report.html"
 PUBLISH = BASE / "publish"
+CONFIG_FILE = BASE / ".kb" / "config.yaml"
+
+
+def load_hub_threshold():
+    """Read graph.hub_threshold from config, default 3."""
+    if CONFIG_FILE.exists():
+        try:
+            cfg = yaml.safe_load(CONFIG_FILE.read_text()) or {}
+            return cfg.get("graph", {}).get("hub_threshold", 3)
+        except yaml.YAMLError:
+            pass
+    return 3
 
 
 def parse_note(filepath):
@@ -41,152 +54,91 @@ def get_source_url(ref_path):
     if not full_path.exists():
         return None
     text = full_path.read_text()
-    # Try "Source: URL" format
     m = re.search(r"^Source:\s*(https?://\S+)", text, re.MULTILINE)
     if m:
         return m.group(1)
-    # Try "source: URL" (YAML frontmatter)
     m = re.search(r"^source:\s*(https?://\S+)", text, re.MULTILINE)
     if m:
         return m.group(1)
     return None
 
 
-def md_to_html(md_text, footnotes, included_slugs):
-    """Convert markdown body to HTML with footnote/wikilink resolution."""
-    lines = md_text.split("\n")
-    html_lines = []
-    in_table = False
-    in_list = False
-    in_ol = False
-    table_header_done = False
+def resolve_wikilinks_and_citations(html, footnotes, included_slugs):
+    """Post-process HTML to resolve wikilinks and citations into anchors/footnotes."""
 
-    def resolve_inline(line):
-        """Resolve wikilinks and citations in a line."""
-        # Wikilinks: [[slug|text]] or [[slug]]
-        def replace_wikilink(m):
-            inner = m.group(1)
-            if "|" in inner:
-                slug, text = inner.split("|", 1)
-            else:
-                slug = text = inner
-            slug = slug.strip()
-            text = text.strip()
-            if slug in included_slugs:
-                return f'<a class="wikilink" href="#{slug}" data-target="{slug}">{text}</a>'
-            else:
-                return f"<strong>{text}</strong>"
-        line = re.sub(r"\[\[([^\]]+)\]\]", replace_wikilink, line)
+    # Wikilinks: [[slug|text]] or [[slug]]
+    def replace_wikilink(m):
+        inner = m.group(1)
+        if "|" in inner:
+            slug, text = inner.split("|", 1)
+        else:
+            slug = text = inner
+        slug = slug.strip()
+        text = text.strip()
+        if slug in included_slugs:
+            return f'<a class="wikilink" href="#{slug}" data-target="{slug}">{text}</a>'
+        else:
+            return f"<strong>{text}</strong>"
+    html = re.sub(r"\[\[([^\]]+)\]\]", replace_wikilink, html)
 
-        # Citations: [text](../references/file.md) → footnote
-        def replace_ref_citation(m):
-            text = m.group(1)
-            ref_path = m.group(2)
-            url = get_source_url(ref_path)
-            if url:
-                fn_num = len(footnotes) + 1
-                footnotes.append((fn_num, text, url))
-                return f'{text}<span class="footnote-ref" data-fn="{fn_num}">[{fn_num}]</span>'
-            return text
-        line = re.sub(r"\[([^\]]+)\]\((\.\.\/references\/[^)]+|references\/[^)]+)\)", replace_ref_citation, line)
-
-        # External URLs: [text](https://...) → footnote
-        def replace_ext_citation(m):
-            text = m.group(1)
-            url = m.group(2)
+    # Reference citations: [text](../references/file.md) → footnote
+    def replace_ref_citation(m):
+        text = m.group(1)
+        ref_path = m.group(2)
+        url = get_source_url(ref_path)
+        if url:
             fn_num = len(footnotes) + 1
             footnotes.append((fn_num, text, url))
             return f'{text}<span class="footnote-ref" data-fn="{fn_num}">[{fn_num}]</span>'
-        line = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", replace_ext_citation, line)
+        return text
+    html = re.sub(r'<a href="(\.\.\/references\/[^"]+|references\/[^"]+)">([^<]+)</a>',
+                  lambda m: replace_ref_citation(type('M', (), {'group': lambda self, n: [None, m.group(2), m.group(1)][n]})()),
+                  html)
+    # Also catch any raw markdown-style citations that python-markdown didn't convert
+    html = re.sub(r"\[([^\]]+)\]\((\.\.\/references\/[^)]+|references\/[^)]+)\)",
+                  replace_ref_citation, html)
 
-        # Bold
-        line = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", line)
-        # Italic
-        line = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", line)
-        # Inline code
-        line = re.sub(r"`([^`]+)`", r"<code>\1</code>", line)
+    # External URL links → footnotes
+    def replace_ext_link(m):
+        url = m.group(1)
+        text = m.group(2)
+        fn_num = len(footnotes) + 1
+        footnotes.append((fn_num, text, url))
+        return f'{text}<span class="footnote-ref" data-fn="{fn_num}">[{fn_num}]</span>'
+    html = re.sub(r'<a href="(https?://[^"]+)">([^<]+)</a>', replace_ext_link, html)
 
-        return line
+    return html
 
-    i = 0
-    while i < len(lines):
-        line = lines[i]
 
-        # Headings (## → h3, ### → h4)
-        if line.startswith("### "):
-            if in_list: html_lines.append("</ul>"); in_list = False
-            if in_ol: html_lines.append("</ol>"); in_ol = False
-            html_lines.append(f"<h4>{resolve_inline(line[4:])}</h4>")
+def md_to_html(md_text, footnotes, included_slugs):
+    """Convert markdown body to HTML using python-markdown, then resolve wikilinks/citations."""
+    # python-markdown handles headings, tables, lists, code, blockquotes, bold, italic, etc.
+    md = markdown.Markdown(extensions=[
+        'tables',
+        'fenced_code',
+        'codehilite',
+        'sane_lists',
+    ], extension_configs={
+        'codehilite': {'css_class': 'highlight', 'guess_lang': False},
+    })
+
+    # Shift headings: ## → h3, ### → h4 (so they nest under the section h2)
+    shifted = []
+    for line in md_text.split("\n"):
+        if line.startswith("#### "):
+            shifted.append("#####" + line[4:])
+        elif line.startswith("### "):
+            shifted.append("####" + line[3:])
         elif line.startswith("## "):
-            if in_list: html_lines.append("</ul>"); in_list = False
-            if in_ol: html_lines.append("</ol>"); in_ol = False
-            html_lines.append(f"<h3>{resolve_inline(line[3:])}</h3>")
-
-        # Table
-        elif "|" in line and line.strip().startswith("|"):
-            if not in_table:
-                html_lines.append("<table>")
-                in_table = True
-                table_header_done = False
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            # Skip separator row
-            if all(re.match(r"^[-:]+$", c) for c in cells):
-                html_lines.append("</thead><tbody>")
-                table_header_done = True
-            elif not table_header_done:
-                html_lines.append("<thead><tr>" + "".join(f"<th>{resolve_inline(c)}</th>" for c in cells) + "</tr>")
-            else:
-                html_lines.append("<tr>" + "".join(f"<td>{resolve_inline(c)}</td>" for c in cells) + "</tr>")
-
-        # End table if next line isn't table
-        elif in_table:
-            html_lines.append("</tbody></table>")
-            in_table = False
-            table_header_done = False
-            # Re-process this line
-            i -= 1; i += 1; continue
-
-        # Unordered list
-        elif line.strip().startswith("- "):
-            if in_ol: html_lines.append("</ol>"); in_ol = False
-            if not in_list:
-                html_lines.append("<ul>")
-                in_list = True
-            html_lines.append(f"<li>{resolve_inline(line.strip()[2:])}</li>")
-
-        # Ordered list
-        elif re.match(r"^\d+\.\s", line.strip()):
-            if in_list: html_lines.append("</ul>"); in_list = False
-            if not in_ol:
-                html_lines.append("<ol>")
-                in_ol = True
-            text = re.sub(r"^\d+\.\s", "", line.strip())
-            html_lines.append(f"<li>{resolve_inline(text)}</li>")
-
-        # Blockquote
-        elif line.strip().startswith("> "):
-            if in_list: html_lines.append("</ul>"); in_list = False
-            if in_ol: html_lines.append("</ol>"); in_ol = False
-            html_lines.append(f"<blockquote>{resolve_inline(line.strip()[2:])}</blockquote>")
-
-        # Empty line
-        elif line.strip() == "":
-            if in_list: html_lines.append("</ul>"); in_list = False
-            if in_ol: html_lines.append("</ol>"); in_ol = False
-
-        # Paragraph
+            shifted.append("###" + line[2:])
+        elif line.startswith("# "):
+            shifted.append("##" + line[1:])
         else:
-            if in_list: html_lines.append("</ul>"); in_list = False
-            if in_ol: html_lines.append("</ol>"); in_ol = False
-            html_lines.append(f"<p>{resolve_inline(line)}</p>")
+            shifted.append(line)
 
-        i += 1
-
-    if in_table: html_lines.append("</tbody></table>")
-    if in_list: html_lines.append("</ul>")
-    if in_ol: html_lines.append("</ol>")
-
-    return "\n".join(html_lines)
+    html = md.convert("\n".join(shifted))
+    html = resolve_wikilinks_and_citations(html, footnotes, included_slugs)
+    return html
 
 
 def build_report(slug, custom_title=None):
@@ -203,20 +155,17 @@ def build_report(slug, custom_title=None):
     related = fm.get("related", [])
     related_slugs = []
     for r in related:
-        # Extract slug from "[[slug]]" format
         m = re.search(r"\[\[([^\]|]+)", str(r))
         if m:
             related_slugs.append(m.group(1))
 
-    # Collect all notes to include
+    hub_threshold = load_hub_threshold()
     notes_to_include = []
     included_slugs = set()
 
-    if len(related_slugs) > 3:  # Hub mode
-        # Hub summary is the intro (not collapsible)
+    if len(related_slugs) > hub_threshold:  # Hub mode
         notes_to_include.append(("__intro__", fm, body))
         included_slugs.add(slug)
-        # Related notes become sections
         for rs in related_slugs:
             rpath = NOTES / f"{rs}.md"
             if rpath.exists():
@@ -224,7 +173,6 @@ def build_report(slug, custom_title=None):
                 notes_to_include.append((rs, rfm, rbody))
                 included_slugs.add(rs)
     else:
-        # Single note mode
         notes_to_include.append((slug, fm, body))
         included_slugs.add(slug)
 
@@ -238,7 +186,6 @@ def build_report(slug, custom_title=None):
         html_body = md_to_html(note_body, footnotes, included_slugs)
 
         if note_slug == "__intro__":
-            # Intro section (not collapsible)
             content_sections.append(f'<div class="section-body">{html_body}</div>')
         else:
             toc_items.append(f'<li><a href="#{note_slug}">{note_title}</a></li>')
@@ -252,12 +199,17 @@ def build_report(slug, custom_title=None):
 
     # Build footnotes HTML
     fn_html = ""
+    seen_urls = {}
     for num, text, url in footnotes:
+        if url in seen_urls:
+            # Deduplicate: point to the first footnote with this URL
+            continue
+        seen_urls[url] = num
         fn_html += f'<li id="fn-{num}"><a href="{url}" target="_blank">{text}</a></li>\n'
 
     # Assemble template
     template = TEMPLATE.read_text()
-    meta = f"Published {date.today().isoformat()} | {len(notes_to_include)} notes | {len(footnotes)} sources"
+    meta = f"Published {date.today().isoformat()} | {len(notes_to_include)} notes | {len(seen_urls)} sources"
 
     html = template.replace("{{TITLE}}", title)
     html = html.replace("{{META}}", meta)

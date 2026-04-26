@@ -22,6 +22,14 @@ You are helping the user build their knowledge base. The user asked a question a
 
 5. **Update taxonomy** — Read `.kb/taxonomy.yaml`. Add any new tags used. Write back.
 
+## Note Type Guidance
+
+This skill defaults to `type: question`, which is one of the most useful types for retrieval. However, consider whether the answer reveals something better captured as:
+- **insight** — if the answer surfaces an original observation, non-obvious connection, or tradeoff (e.g., "Why is X hard?" → the answer is really about a fundamental tension)
+- **concept** — if the question is really "What is X?" and the answer is a pure explanation with no Q&A structure
+
+Prefer `question` when there's a clear question + answer + takeaways structure. Prefer `insight` when the value is in the observation itself.
+
 ## Note Creation Rules
 
 - Filename: slugified title, e.g. `tcp-congestion-control.md`

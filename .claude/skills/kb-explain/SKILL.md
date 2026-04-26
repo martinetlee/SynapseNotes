@@ -11,8 +11,9 @@ Synthesize everything the KB knows about a topic into a coherent, structured nar
 
 ## Steps
 
-1. **Find relevant notes** — Use the search index + manual search:
-   - Run `python3 .kb/kb-index.py search "TOPIC"` for semantic ranking
+1. **Find relevant notes** — Use multi-query search + manual search:
+   - Generate 2-3 reformulations of the topic (synonyms, technical terms, related concepts)
+   - Run `python3 .kb/kb-index.py search "TOPIC" --multi "REFORMULATION 1" "REFORMULATION 2"` for fused ranking
    - Run `python3 .kb/kb-index.py coverage "TOPIC"` to assess coverage level
    - Also check: filename and tag matches
    - Body content matches
@@ -71,12 +72,13 @@ Save this explanation as a synthesis note? (yes / no)
 If yes, create a `type: synthesis` note in `notes/`:
 - Title: "Synthesis: [Topic]"
 - `type: synthesis`
+- `depends_on:` list of all atomic note slugs used to generate this synthesis (for staleness tracking)
 - `sources:` lists all notes used (as `../references/` paths or note slugs)
 - `related:` links to all atomic notes referenced
 - Body is the narrative with `[[wikilinks]]` preserved
 - Synthesis notes are **rewritable** — they can be regenerated from atomic notes at any time. The atomic notes remain the source of truth.
 
-This creates a persistent "executive summary" layer. When atomic notes are updated, the synthesis may become stale — flag with `valid_until` or regenerate.
+**Dependency tracking**: The `depends_on` field enables `python3 .kb/kb-index.py stale-syntheses` to detect when a synthesis needs regeneration (i.e., when any dependency has been updated more recently than the synthesis). `/kb-review` checks this automatically.
 
 ## Rules
 

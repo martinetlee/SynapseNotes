@@ -52,6 +52,11 @@ Pick the type based on content:
 - **reference**: Information from an external source discussed
 - **insight**: Original observation, connection, or conclusion
 
+**Type balance nudge**: Before presenting candidates, run `python3 .kb/kb-index.py stats` to see the current type distribution. If `question` or `insight` types are underrepresented (< 15% each), actively look for conversation content that fits those types. For example:
+- A debugging discussion often contains an implicit **question** ("Why does X happen?") worth capturing
+- A comparison or tradeoff discussion often contains an **insight** ("X is better than Y when Z") worth capturing
+- Don't force a type that doesn't fit — but do consider whether `concept` is really the best type or whether `question` or `insight` would be more accurate
+
 ## Rules
 
 - Only extract genuinely useful knowledge — skip small talk, debugging noise, and trivial exchanges

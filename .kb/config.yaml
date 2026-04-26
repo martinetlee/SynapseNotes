@@ -6,4 +6,54 @@ note_types:
   - concept
   - reference
   - insight
+  - synthesis
 web_search: true  # /kb-question can use web search
+
+# --- Search & Retrieval ---
+search:
+  rrf_constant: 25                # Reciprocal Rank Fusion blending constant (lower = more weight to top-ranked)
+  min_score: 0.01                 # Floor — results below this are discarded
+  cluster_boost_scale: 0.15       # Max boost for underrepresented clusters (0 = off)
+  temporal_expired_penalty: 0.3   # Multiplier for notes past valid_until
+  deprecated_penalty: 0.2         # Multiplier for deprecated notes
+  title_boost: 2.0                # Multiplier when query words appear in note title
+  tag_boost: 1.5                  # Multiplier when query words match a tag
+
+# --- Coverage Assessment ---
+coverage:
+  well_covered_min_score: 0.15    # Top-match TF-IDF score for "well-covered"
+  well_covered_min_notes: 3       # Minimum relevant notes for "well-covered"
+  partial_min_score: 0.08         # Top-match TF-IDF score for "partially-covered"
+  partial_min_notes: 1            # Minimum relevant notes for "partially-covered"
+  relevance_floor: 0.05           # Notes below this score aren't counted as relevant
+
+# --- Similarity ---
+similarity:
+  min_score: 0.05                 # Floor for find_similar results
+  contradiction_overlap: 0.15     # Minimum overlap to flag as contradiction candidate
+  contradiction_high: 0.4         # Score above which overlap is "HIGH"
+  dedup_threshold: 0.5            # Score above which notes are likely duplicates
+
+# --- Clustering ---
+clusters:
+  min_tag_notes: 5                # Minimum notes for a tag to form a cluster
+  merge_overlap: 0.6              # Overlap ratio above which clusters merge
+
+# --- Staleness ---
+staleness:
+  default_days: 180               # Days without update before flagged stale
+
+# --- Indexing ---
+indexing:
+  max_features: 10000             # TF-IDF vocabulary size cap
+  ngram_range: [1, 2]             # Unigrams + bigrams
+  min_df: 1
+  max_df: 0.95
+  vocab_drift_threshold: 0.1      # Fraction of new terms that triggers full rebuild (incremental)
+
+# --- Link Graph ---
+graph:
+  hub_threshold: 3                # Minimum related notes to treat as hub in publishing
+  expansion_hops: 1               # Hops to expand from top search results (0 = off)
+  expansion_seeds: 5              # Number of top results to expand from
+  expansion_decay: 0.5            # Score decay per hop (neighbor gets seed_score * decay)

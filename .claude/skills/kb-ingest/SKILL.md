@@ -54,6 +54,8 @@ Ingest source material and extract atomic knowledge base notes.
 
    The reference hub note (item 0) is always included. User picks which concept notes to create.
 
+   **Type balance**: When classifying candidates, actively consider whether each is better as a `question` (if the source answers a specific "how/why" question), `insight` (if it reveals a non-obvious connection or tradeoff), or `concept` (if it's a pure explanation). Don't default everything to `concept`.
+
 5. **Wait for user selection** — Ask which to save (e.g. "all", "1,3", "none"). Use AskUserQuestion.
 
 6. **Create the reference hub note** — Always created. This is a `reference`-type note that:

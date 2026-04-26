@@ -11,9 +11,24 @@ Search the knowledge base for notes relevant to the user's query and synthesize 
 
 ## Steps
 
-1. **Rebuild index if stale** — Run `python3 .kb/kb-index.py build` if the index is missing or if notes have been added/modified since last build. Check `.kb/index/metadata.json` timestamp.
+1. **Assess query complexity** — Decide the retrieval tier:
+   - **Quick lookup** (query is a specific term, name, or concept): Run `python3 .kb/kb-index.py quick "QUERY"` first. If it returns a clear match (score > 3.0), read that note and answer directly — skip full search.
+   - **Full search** (query needs synthesis across multiple notes): proceed to step 2.
 
-2. **Semantic search** — Run `python3 .kb/kb-index.py search "QUERY"` to get ranked results. This uses TF-IDF with contextual metadata prepending (Anthropic's contextual retrieval approach).
+2. **Multi-query search** — Generate 2-3 alternative phrasings of the user's query to overcome vocabulary mismatch. The original query may use different words than the notes.
+
+   For example, if the user asks "How do pig butchering scams work?", also search:
+   - "pig butchering compound infrastructure fraud operations"
+   - "romance baiting investment scam detection"
+
+   Run with multi-query fusion:
+   ```
+   python3 .kb/kb-index.py search "ORIGINAL QUERY" --multi "REFORMULATION 1" "REFORMULATION 2"
+   ```
+
+   **How to reformulate**: Use synonyms, technical terms, related concepts, and different phrasings of the same intent. Think about what words the note *titles* and *tags* would use, not just how a human would phrase the question. Check `.kb/taxonomy.yaml` for relevant tags.
+
+   If the query is already very specific and technical (e.g., "BM25 vs TF-IDF"), a single query is fine — skip `--multi`.
 
    Optionally filter:
    - `--tags tag1,tag2` to restrict by tags
@@ -21,10 +36,10 @@ Search the knowledge base for notes relevant to the user's query and synthesize 
 
 3. **Check coverage** — Run `python3 .kb/kb-index.py coverage "QUERY"` to assess if the KB has adequate coverage.
 
-   Coverage levels:
-   - **well-covered** (top_score > 0.4, 3+ relevant notes): proceed to synthesis
-   - **partially-covered** (top_score > 0.2, 1+ note): synthesize what exists, explicitly flag gaps
-   - **not-covered** (top_score < 0.2): tell the user the KB doesn't cover this topic and suggest `/kb-question` or `/kb-research`
+   Coverage levels (thresholds configured in `.kb/config.yaml` under `coverage:`):
+   - **well-covered**: proceed to synthesis
+   - **partially-covered**: synthesize what exists, explicitly flag gaps
+   - **not-covered**: tell the user the KB doesn't cover this topic and suggest `/kb-question` or `/kb-research`
 
 4. **Read matching notes** — Read the full content of top-scoring notes (up to 5 for synthesis, read more for verification if needed).
 
@@ -61,6 +76,14 @@ After drafting the answer, self-check:
 - Use `[[note-name]]` (without `.md`) for all citations
 - Respect temporal validity — deprioritize expired/deprecated notes
 - Keep the synthesized answer concise; point to notes for full detail
+
+## Feedback
+
+If the user indicates the results were wrong or incomplete, log feedback:
+```
+python3 .kb/kb-index.py feedback log "QUERY" "FAILURE_TYPE" "expected_slug1,slug2" "notes"
+```
+Failure types: `missed` (relevant note not retrieved), `wrong` (irrelevant note ranked high), `stale` (outdated note returned), `irrelevant` (answer didn't address the question).
 
 ## Query
 

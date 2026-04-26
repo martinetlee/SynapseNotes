@@ -1,0 +1,124 @@
+{
+  "_comment": "Golden query set for KB retrieval evaluation. Each entry has a query, reformulations (for multi-query testing), and expected relevant notes (graded 0-2). Expand to 50 queries for stable metrics.",
+  "queries": [
+    {
+      "id": "q01",
+      "query": "How do pig butchering scams work?",
+      "reformulations": ["pig butchering compound infrastructure fraud operations", "romance baiting investment scam victimization"],
+      "relevant": {
+        "pig-butchering-compound-infrastructure": 2,
+        "why-pig-butchering-detection-hard": 2,
+        "fincen-pig-butchering-typology": 2,
+        "scam-categories-and-loss-magnitudes-2024": 1,
+        "romance-baiting-terminology-debate": 1
+      }
+    },
+    {
+      "id": "q02",
+      "query": "What is DPRK's approach to social engineering in crypto?",
+      "reformulations": ["north korea lazarus group cryptocurrency targeting heists", "DPRK fake meeting clickfix blockchain attack"],
+      "relevant": {
+        "dprk-social-engineering-playbook": 2,
+        "dprk-fake-meeting-clickfix-attack": 2,
+        "dprk-it-worker-infiltration": 1,
+        "dprk-crypto-targeting-heists": 1,
+        "dprk-brand-impersonation-nation-state-comparison": 1
+      }
+    },
+    {
+      "id": "q03",
+      "query": "How does RAG retrieval compare vector vs graph approaches?",
+      "reformulations": ["graphrag architecture variants vs vector database retrieval", "hybrid rag dense sparse graph augmented search"],
+      "relevant": {
+        "graphrag-architecture-variants": 2,
+        "hybrid-rag-architectures": 2,
+        "bm25-vs-dense-vector-retrieval": 2,
+        "vector-rag-vs-graphrag-task-dependent-performance": 2,
+        "production-rag-cost-latency-maintenance": 1
+      }
+    },
+    {
+      "id": "q04",
+      "query": "What are the differences between SOC 2 and ISO 27001?",
+      "reformulations": ["soc2 vs iso27001 dual compliance comparison controls", "security compliance frameworks certification differences"],
+      "relevant": {
+        "soc2-vs-iso27001-dual-compliance": 2,
+        "soc2-compliance-overview": 1,
+        "iso27001-certification-overview": 1,
+        "security-compliance-frameworks-landscape": 1,
+        "triple-compliance-soc2-iso27001-hipaa": 1
+      }
+    },
+    {
+      "id": "q05",
+      "query": "How do multi-agent systems share memory?",
+      "reformulations": ["multi-agent memory sharing architectures shared vs private", "agent knowledge transfer message passing conflict resolution"],
+      "relevant": {
+        "multi-agent-memory-sharing-architectures": 2,
+        "multi-agent-memory-framework-comparison": 2,
+        "shared-vs-private-memory-tradeoffs": 2,
+        "multi-agent-knowledge-transfer-shared-memory-vs-message-passing": 1,
+        "memory-conflict-resolution-multi-agent": 1
+      }
+    },
+    {
+      "id": "q06",
+      "query": "What techniques detect deepfake video and voice cloning?",
+      "reformulations": ["video deepfake detection liveness anti-spoofing", "voice clone detection asvspoof audio verification"],
+      "relevant": {
+        "video-deepfake-detection-techniques": 2,
+        "voice-clone-detection-asvspoof": 2,
+        "deepfake-scam-incidents-2024": 1,
+        "dprk-ai-deepfake-sophistication": 1
+      }
+    },
+    {
+      "id": "q07",
+      "query": "How do self-improving AI agents work and what are the risks?",
+      "reformulations": ["self improving agent architectures taxonomy recursive improvement", "reward hacking self correction limitations reflexion pattern"],
+      "relevant": {
+        "self-improving-agent-architectures-taxonomy": 2,
+        "reward-hacking-in-self-improving-systems": 2,
+        "llm-self-correction-limitations": 1,
+        "reflexion-pattern": 1,
+        "external-grounding-key-condition-for-self-improvement": 2
+      }
+    },
+    {
+      "id": "q08",
+      "query": "What is the best chunk size for RAG retrieval?",
+      "reformulations": ["optimal chunk size token length document splitting", "chunking strategies recursive semantic hierarchical parent child"],
+      "relevant": {
+        "optimal-chunk-size-for-rag-retrieval": 2,
+        "chunking-strategies-comparison": 2,
+        "hierarchical-chunking-parent-child": 1,
+        "note-granularity-spectrum-for-llm-retrieval": 1,
+        "contextual-retrieval-anthropic": 1
+      }
+    },
+    {
+      "id": "q09",
+      "query": "How do phishing attacks evade email security?",
+      "reformulations": ["phishing evasion techniques AiTM cookie theft bypass", "dmarc spf dkim enforcement gap email authentication"],
+      "relevant": {
+        "phishing-evasion-techniques-2025": 2,
+        "phishing-kit-evolution-aitm": 2,
+        "dmarc-enforcement-gap": 1,
+        "compromised-legitimate-sender-problem": 1,
+        "quishing-qr-code-phishing": 1
+      }
+    },
+    {
+      "id": "q10",
+      "query": "How should AI agent benchmarks be designed to avoid gaming?",
+      "reformulations": ["agent benchmark design flaws gaming exploitation", "swe-bench evaluation contamination real world gap"],
+      "relevant": {
+        "agent-benchmark-design-flaws": 2,
+        "agent-benchmark-gaming-and-exploitation": 2,
+        "benchmark-performance-vs-real-world-gap": 2,
+        "swe-bench-verified-limitations": 1,
+        "golden-datasets-for-agent-evaluation": 1
+      }
+    }
+  ]
+}
