@@ -156,28 +156,65 @@ def build_index():
     return tfidf_matrix, vectorizer, slugs, metadata
 
 
-def build_dense_embeddings(slugs, texts):
-    """Build dense embeddings via API (OpenAI or Voyage). Optional."""
+def detect_embedding_provider():
+    """Auto-detect the best available embedding provider. Returns (provider, detail) or (None, reason)."""
     import os
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VOYAGE_API_KEY")
-    if not api_key:
-        print("No API key found (OPENAI_API_KEY or VOYAGE_API_KEY). Skipping dense embeddings.")
+
+    # 1. Check for local sentence-transformers (best: no API key, free, fast)
+    try:
+        from sentence_transformers import SentenceTransformer  # noqa: F401
+        return "local", "sentence-transformers (all-MiniLM-L6-v2)"
+    except ImportError:
+        pass
+
+    # 2. Check for Voyage API key (best quality for code/technical content)
+    if os.environ.get("VOYAGE_API_KEY"):
+        return "voyage", "Voyage AI (voyage-3-lite)"
+
+    # 3. Check for OpenAI API key
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai", "OpenAI (text-embedding-3-small)"
+
+    return None, "No provider available. Options: pip install sentence-transformers, or set VOYAGE_API_KEY/OPENAI_API_KEY"
+
+
+def build_dense_embeddings(slugs, texts):
+    """Build dense embeddings using best available provider. Fully optional."""
+    provider, detail = detect_embedding_provider()
+
+    if provider is None:
+        print(f"Dense embeddings: skipped ({detail})")
         return
 
-    provider = "voyage" if os.environ.get("VOYAGE_API_KEY") else "openai"
+    print(f"Dense embeddings: using {detail}")
 
     try:
-        if provider == "openai":
-            import urllib.request
+        if provider == "local":
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            embeddings = model.encode(texts, show_progress_bar=True, batch_size=32)
+            np.savez_compressed(EMBEDDINGS_FILE,
+                                embeddings=np.array(embeddings),
+                                slugs=np.array(slugs))
+            print(f"Dense embeddings built: {len(embeddings)} vectors, {embeddings.shape[1]} dims (local)")
+
+        elif provider in ("openai", "voyage"):
+            import os, urllib.request
+            if provider == "voyage":
+                api_key = os.environ["VOYAGE_API_KEY"]
+                url = "https://api.voyageai.com/v1/embeddings"
+                model = "voyage-3-lite"
+            else:
+                api_key = os.environ["OPENAI_API_KEY"]
+                url = "https://api.openai.com/v1/embeddings"
+                model = "text-embedding-3-small"
+
             embeddings = []
-            # Batch in groups of 20
             for i in range(0, len(texts), 20):
                 batch = texts[i:i+20]
-                req = urllib.request.Request(
-                    "https://api.openai.com/v1/embeddings",
-                    data=json.dumps({"input": batch, "model": "text-embedding-3-small"}).encode(),
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                )
+                req = urllib.request.Request(url,
+                    data=json.dumps({"input": batch, "model": model}).encode(),
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
                 with urllib.request.urlopen(req) as resp:
                     result = json.loads(resp.read())
                     for item in result["data"]:
@@ -187,28 +224,7 @@ def build_dense_embeddings(slugs, texts):
             np.savez_compressed(EMBEDDINGS_FILE,
                                 embeddings=np.array(embeddings),
                                 slugs=np.array(slugs))
-            print(f"Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims")
-
-        elif provider == "voyage":
-            import urllib.request
-            embeddings = []
-            for i in range(0, len(texts), 20):
-                batch = texts[i:i+20]
-                req = urllib.request.Request(
-                    "https://api.voyageai.com/v1/embeddings",
-                    data=json.dumps({"input": batch, "model": "voyage-3-lite"}).encode(),
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req) as resp:
-                    result = json.loads(resp.read())
-                    for item in result["data"]:
-                        embeddings.append(item["embedding"])
-                print(f"  Embedded {min(i+20, len(texts))}/{len(texts)}")
-
-            np.savez_compressed(EMBEDDINGS_FILE,
-                                embeddings=np.array(embeddings),
-                                slugs=np.array(slugs))
-            print(f"Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims")
+            print(f"Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims ({provider})")
 
     except Exception as e:
         print(f"Dense embedding failed: {e}")
@@ -283,31 +299,44 @@ def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
     query_vec = vectorizer.transform([query]).toarray()
     tfidf_sims = cosine_similarity(query_vec, vectors)[0]
 
-    # Dense embedding similarity (if available)
+    # Dense embedding similarity (if available — auto-detects provider)
     dense_sims = np.zeros_like(tfidf_sims)
     has_dense = False
     if EMBEDDINGS_FILE.exists():
         try:
-            import os
-            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VOYAGE_API_KEY")
-            if api_key:
-                dense_npz = np.load(EMBEDDINGS_FILE)
-                dense_vecs = dense_npz["embeddings"]
-                # Embed query
-                provider = "voyage" if os.environ.get("VOYAGE_API_KEY") else "openai"
-                import urllib.request
-                url = "https://api.voyageai.com/v1/embeddings" if provider == "voyage" else "https://api.openai.com/v1/embeddings"
-                model = "voyage-3-lite" if provider == "voyage" else "text-embedding-3-small"
+            dense_npz = np.load(EMBEDDINGS_FILE)
+            dense_vecs = dense_npz["embeddings"]
+
+            provider, _ = detect_embedding_provider()
+            q_emb = None
+
+            if provider == "local":
+                from sentence_transformers import SentenceTransformer
+                model = SentenceTransformer("all-MiniLM-L6-v2")
+                q_emb = model.encode([query]).reshape(1, -1)
+
+            elif provider in ("openai", "voyage"):
+                import os, urllib.request
+                if provider == "voyage":
+                    api_key = os.environ["VOYAGE_API_KEY"]
+                    url = "https://api.voyageai.com/v1/embeddings"
+                    model_name = "voyage-3-lite"
+                else:
+                    api_key = os.environ["OPENAI_API_KEY"]
+                    url = "https://api.openai.com/v1/embeddings"
+                    model_name = "text-embedding-3-small"
                 req = urllib.request.Request(url,
-                    data=json.dumps({"input": [query], "model": model}).encode(),
+                    data=json.dumps({"input": [query], "model": model_name}).encode(),
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
                 with urllib.request.urlopen(req) as resp:
                     result = json.loads(resp.read())
                     q_emb = np.array(result["data"][0]["embedding"]).reshape(1, -1)
+
+            if q_emb is not None:
                 dense_sims = cosine_similarity(q_emb, dense_vecs)[0]
                 has_dense = True
         except Exception:
-            pass
+            pass  # Fall back to TF-IDF only
 
     # Hybrid fusion: RRF (Reciprocal Rank Fusion) when both available, else TF-IDF only
     if has_dense:
@@ -478,21 +507,32 @@ def find_stale(days_threshold=180):
 
 
 def check_coverage(topic):
-    """Check if the KB has adequate coverage of a topic. Returns coverage assessment."""
-    results = search(topic, top_k=10)
+    """Check if the KB has adequate coverage of a topic. Uses TF-IDF scores (not hybrid RRF) for stable assessment."""
+    # Use TF-IDF directly for coverage — it has natural similarity interpretation
+    vectors, vectorizer, slugs, metadata = load_index()
+    query_vec = vectorizer.transform([topic]).toarray()
+    tfidf_sims = cosine_similarity(query_vec, vectors)[0]
+    ranked = np.argsort(tfidf_sims)[::-1][:10]
+    results = []
+    for idx in ranked:
+        if tfidf_sims[idx] < 0.01:
+            break
+        slug = slugs[idx]
+        meta = metadata.get(slug, {})
+        results.append({"slug": slug, "title": meta.get("title", slug), "score": round(float(tfidf_sims[idx]), 4)})
 
     if not results:
         return {"covered": False, "confidence": 0, "message": f"No notes found matching '{topic}'", "notes": []}
 
-    top_score = results[0]["score"]
-    num_relevant = sum(1 for r in results if r["score"] > 0.1)
+    top_score = results[0]["score"] if results else 0
+    num_relevant = sum(1 for r in results if r["score"] > 0.05)
 
-    if top_score > 0.4 and num_relevant >= 3:
+    if top_score > 0.15 and num_relevant >= 3:
         level = "well-covered"
-        confidence = min(top_score * 2, 1.0)
-    elif top_score > 0.2 and num_relevant >= 1:
+        confidence = min(top_score * 4, 1.0)
+    elif top_score > 0.08 and num_relevant >= 1:
         level = "partially-covered"
-        confidence = top_score
+        confidence = top_score * 2
     else:
         level = "not-covered"
         confidence = top_score
@@ -534,7 +574,15 @@ def stats():
     print(f"Features: {index_data.get('feature_count', 'unknown')}")
     print(f"Total words: {total_words:,}")
     print(f"Deprecated: {deprecated}")
-    print(f"Dense embeddings: {'yes' if EMBEDDINGS_FILE.exists() else 'no (TF-IDF only)'}")
+    provider, detail = detect_embedding_provider()
+    if EMBEDDINGS_FILE.exists():
+        dense_npz = np.load(EMBEDDINGS_FILE)
+        dims = dense_npz["embeddings"].shape[1]
+        print(f"Dense embeddings: yes ({dims} dims, {dense_npz['embeddings'].shape[0]} vectors)")
+    elif provider:
+        print(f"Dense embeddings: available but not built (run 'build --embed'). Provider: {detail}")
+    else:
+        print(f"Dense embeddings: not available. {detail}")
     print(f"Topic clusters: {len(json.loads(CLUSTERS_FILE.read_text())) if CLUSTERS_FILE.exists() else 0}")
     print(f"Types: {json.dumps(types, indent=2)}")
     print(f"Top tags: {json.dumps(dict(sorted(all_tags.items(), key=lambda x: -x[1])[:20]), indent=2)}")
@@ -548,11 +596,8 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
 
     if cmd == "build":
-        result = build_index()
+        build_index()
         if "--embed" in sys.argv:
-            if result:
-                _, _, slugs, _ = result[0] if isinstance(result, list) else (None, None, None, None)
-            # Re-read texts for embedding
             notes_list = sorted(NOTES.glob("*.md"))
             slugs = [p.stem for p in notes_list]
             texts = []
@@ -560,6 +605,15 @@ if __name__ == "__main__":
                 fm, body, _ = parse_note(p)
                 texts.append(extract_contextual_text(fm, body))
             build_dense_embeddings(slugs, texts)
+        else:
+            # Show embedding status
+            provider, detail = detect_embedding_provider()
+            if EMBEDDINGS_FILE.exists():
+                print(f"Dense embeddings: cached (run 'build --embed' to rebuild)")
+            elif provider:
+                print(f"Dense embeddings: available via {detail} (run 'build --embed' to enable)")
+            else:
+                print(f"Dense embeddings: not available ({detail})")
 
     elif cmd == "search":
         if len(sys.argv) < 3:
