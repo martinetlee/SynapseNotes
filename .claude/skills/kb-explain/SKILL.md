@@ -2,19 +2,21 @@
 name: kb-explain
 description: Synthesize a coherent narrative explanation of a topic from multiple KB notes
 user_invocable: true
-arguments: The topic to explain
+arguments: "The topic to explain. Optional: --kb <name> to search a specific KB (default: all non-private KBs)"
 ---
 
 # /kb-explain
 
 Synthesize everything the KB knows about a topic into a coherent, structured narrative.
 
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, search only that KB. If not specified, search all non-private KBs (unified index). Pass `--kb <name>` to `kb-index.py` commands when scoping to a single KB.
+
 ## Steps
 
 1. **Find relevant notes** — Use multi-query search + manual search:
    - Generate 2-3 reformulations of the topic (synonyms, technical terms, related concepts)
-   - Run `python3 .kb/kb-index.py search "TOPIC" --multi "REFORMULATION 1" "REFORMULATION 2"` for fused ranking
-   - Run `python3 .kb/kb-index.py coverage "TOPIC"` to assess coverage level
+   - Run `python3 .kb/kb-index.py search "TOPIC" --multi "REFORMULATION 1" "REFORMULATION 2" [--kb <name>]` for fused ranking
+   - Run `python3 .kb/kb-index.py coverage "TOPIC" [--kb <name>]` to assess coverage level
    - Also check: filename and tag matches
    - Body content matches
    - Notes linked from direct matches (follow the wikilink graph)
@@ -69,16 +71,16 @@ After presenting the narrative, offer to save it:
 Save this explanation as a synthesis note? (yes / no)
 ```
 
-If yes, create a `type: synthesis` note in `notes/`:
+If yes, create a `type: synthesis` note in the target KB directory (`kbs/<kb_name>/`). If searching across all KBs, ask the user which KB to save to (default: `general`).
 - Title: "Synthesis: [Topic]"
 - `type: synthesis`
 - `depends_on:` list of all atomic note slugs used to generate this synthesis (for staleness tracking)
-- `sources:` lists all notes used (as `../references/` paths or note slugs)
+- `sources:` lists all notes used (as `../../references/` paths or note slugs)
 - `related:` links to all atomic notes referenced
 - Body is the narrative with `[[wikilinks]]` preserved
 - Synthesis notes are **rewritable** — they can be regenerated from atomic notes at any time. The atomic notes remain the source of truth.
 
-**Dependency tracking**: The `depends_on` field enables `python3 .kb/kb-index.py stale-syntheses` to detect when a synthesis needs regeneration (i.e., when any dependency has been updated more recently than the synthesis). `/kb-review` checks this automatically.
+**Dependency tracking**: The `depends_on` field enables `python3 .kb/kb-index.py stale-syntheses [--kb <name>]` to detect when a synthesis needs regeneration (i.e., when any dependency has been updated more recently than the synthesis). `/kb-review` checks this automatically.
 
 ## Rules
 

@@ -16,10 +16,11 @@ mkdir -p "$DEST"
 
 cd "$KB_DIR"
 tar -czf "$BACKUP_FILE" \
-    notes/ \
+    kbs/ \
     references/ \
     .kb/index/ \
     .kb/log.md \
+    .kb/taxonomy.yaml \
     publish/ \
     2>/dev/null || true
 

@@ -2,7 +2,7 @@
 name: kb-research
 description: Agentic research loop that deeply investigates a topic via web search and saves findings as atomic notes
 user_invocable: true
-arguments: "Topic to research. Optional flags: --depth shallow or medium or deep, --checkpoint plan or each or end"
+arguments: "Topic to research. Optional flags: --depth shallow or medium or deep, --checkpoint plan or each or end, --kb <name> to target a specific KB (default: general)"
 ---
 
 # /kb-research
@@ -14,6 +14,7 @@ Agentic research loop. Given a topic, plan a research agenda, iteratively search
 Extract from $ARGUMENTS:
 - **Topic**: the research subject (required)
 - **--depth**: `shallow` | `medium` | `deep` (default: `medium`)
+- **--kb**: target KB name (default: `general`). Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
 - **--checkpoint**: when to pause for user input (default: `plan+end`)
   - `plan` — pause after planning, then run autonomously until synthesis
   - `each` — pause after each sub-question to show findings and ask to continue/redirect
@@ -30,7 +31,7 @@ Extract from $ARGUMENTS:
 
 ## Phase 1: PLAN
 
-1. **Check existing KB** — Search `notes/` for what the KB already knows about this topic. Read any relevant notes.
+1. **Check existing KB** — Search all KBs (`kbs/*/`) for what the KB already knows about this topic. Read any relevant notes.
 
 2. **Break topic into research questions** — Decompose the topic into 3-7 specific, answerable sub-questions. Consider:
    - What are the core concepts?
@@ -146,13 +147,13 @@ After all questions are researched:
 3. **Wait for user selection** — User picks which notes to create.
 
 4. **Create notes** — For each selected note:
-   a. **Contradiction check**: Run `python3 .kb/kb-index.py search "NOTE_TITLE"` to find similar existing notes. If score > 0.3, read those notes and check for conflicting claims. If contradictions found, ask user: reconcile, update existing, or create separate with link?
+   a. **Contradiction check**: Run `python3 .kb/kb-index.py search "NOTE_TITLE" --kb <kb_name>` to find similar existing notes. If score > 0.3, read those notes and check for conflicting claims. If contradictions found, ask user: reconcile, update existing, or create separate with link?
    b. **Dedup check**: If similar note score > 0.5, it likely covers the same concept — suggest updating the existing note instead of creating a duplicate.
    c. Create/update following CLAUDE.md format
-   d. **Cite all sources inline via local reference files** — every claim must trace back to `[display text](../references/filename.md)`. The reference file contains the external URL. Never cite external URLs directly in notes if a reference file exists for that source.
+   d. **Cite all sources inline via local reference files** — every claim must trace back to `[display text](../../references/filename.md)` (two levels up from `kbs/<kb_name>/`). The reference file contains the external URL. Never cite external URLs directly in notes if a reference file exists for that source.
    e. Add `[[wikilinks]]` to the research hub and related notes, in both directions
    f. **Define terms inline** — on first use of a technical term not commonly known, add a brief parenthetical definition. Link to a concept note via wikilink only if one exists.
-   g. **Rebuild index**: After creating all notes, run `python3 .kb/kb-index.py build --incremental` to update the search index (only re-indexes changed notes).
+   g. **Rebuild index**: After creating all notes, run `python3 .kb/kb-index.py build --incremental --kb <kb_name>` to update the search index (only re-indexes changed notes).
 
 5. **Create research hub note** — A `reference`-type note that:
    - Summarizes the research topic and key findings

@@ -2,14 +2,16 @@
 name: kb-question
 description: Ask a question and Claude saves the answer as an atomic note in the knowledge base
 user_invocable: true
-arguments: The question to research and note down
+arguments: "The question to research and note down. Optional: --kb <name> to target a specific KB (default: general)"
 ---
 
 # /kb-question
 
 You are helping the user build their knowledge base. The user asked a question and you need to:
 
-1. **Search existing notes** — Use Glob and Grep to check if `notes/` already has a note covering this topic.
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, default to `general`. Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
+
+1. **Search existing notes** — Use Glob and Grep to check if `kbs/<kb_name>/` already has a note covering this topic. Also search other KBs for related content.
 2. **Research the answer** — Use your own knowledge and optionally WebSearch/WebFetch if the question benefits from current information or specific sources.
 3. **Answer the question** — Present a clear, thorough answer to the user in the conversation.
 4. **Save as atomic note** — After answering:
@@ -33,7 +35,7 @@ Prefer `question` when there's a clear question + answer + takeaways structure. 
 ## Note Creation Rules
 
 - Filename: slugified title, e.g. `tcp-congestion-control.md`
-- Save to: `notes/` directory (flat, no subfolders)
+- Save to: `kbs/<kb_name>/` directory (flat, no subfolders). Default KB is `general`.
 - Follow the note format from CLAUDE.md exactly
 - For question-type notes, use this body structure:
 
@@ -52,7 +54,7 @@ Prefer `question` when there's a clear question + answer + takeaways structure. 
 - Set `created` and `updated` to today's date
 - Set `type: question`
 - Include `sources` in frontmatter if web search was used
-- **Always cite sources inline** — every claim from an external source must have a citation near it in the body, not just in frontmatter. Use `[text](url)` for web sources, `[text](file-path)` for ingested files, or `(Source: Title)` for books/papers/other
+- **Always cite sources inline** — every claim from an external source must have a citation near it in the body, not just in frontmatter. Use `[text](../../references/filename.md)` for reference files (two levels up from `kbs/<kb_name>/`), `[text](url)` for web sources, or `(Source: Title)` for books/papers/other
 
 ## After Saving
 

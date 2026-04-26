@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """MCP server exposing KB read operations as tools.
 
+Supports multiple knowledge bases. Each tool accepts an optional `kb` parameter
+to target a specific KB.  When omitted, tools search the unified index (all
+non-private KBs) or the default KB, depending on the operation.
+
 Run via: uv run --directory .kb mcp_server.py
 Or configure in Claude Code settings as an MCP server.
 """
@@ -18,16 +22,19 @@ sys.path.insert(0, str(KB_DIR))
 # Import kb-index as a module (handles the hyphen in filename)
 import importlib.util
 spec = importlib.util.spec_from_file_location("kb_index", KB_DIR / "kb-index.py")
-kb = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(kb)
+kb_mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kb_mod)
 
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(
     "Knowledge Base",
-    instructions="Personal knowledge base with 200+ atomic markdown notes. "
+    instructions="Personal knowledge base with multiple KBs of atomic markdown notes. "
     "Search, explore, and navigate topics across scam detection, AI agents, "
-    "blockchain security, compliance, and more.",
+    "blockchain security, compliance, and more. "
+    "Use `kb_list()` to see available knowledge bases. "
+    "All tools accept an optional `kb` parameter to target a specific KB; "
+    "omit it to search the unified index across all non-private KBs.",
 )
 
 # ---------------------------------------------------------------------------
@@ -35,6 +42,7 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 _last_check = None
+
 
 def _ensure_index_fresh():
     """Rebuild index if notes have changed since last build."""
@@ -46,20 +54,28 @@ def _ensure_index_fresh():
         return
     _last_check = now
 
-    meta_file = kb.META_FILE
-    if not meta_file.exists():
-        kb.build_index()
-        return
+    registry = kb_mod.get_registry()
+    needs_rebuild = False
 
-    # Compare newest note mtime against index build time
-    meta_mtime = meta_file.stat().st_mtime
-    notes = list(kb.NOTES.glob("*.md"))
-    if not notes:
-        return
+    for kbc in registry.all_kbs():
+        meta_file = kbc.meta_file
+        if not meta_file.exists():
+            needs_rebuild = True
+            break
 
-    newest_note = max(p.stat().st_mtime for p in notes)
-    if newest_note > meta_mtime:
-        kb.build_index(incremental=True)
+        # Compare newest note mtime against index build time
+        meta_mtime = meta_file.stat().st_mtime
+        notes = list(kbc.notes_dir.glob("*.md"))
+        if not notes:
+            continue
+
+        newest_note = max(p.stat().st_mtime for p in notes)
+        if newest_note > meta_mtime:
+            needs_rebuild = True
+            break
+
+    if needs_rebuild:
+        kb_mod.build_index()
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +83,20 @@ def _ensure_index_fresh():
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def kb_search(query: str, reformulations: list[str] | None = None, tags: str | None = None, type: str | None = None) -> str:
+def kb_list() -> str:
+    """List all available knowledge bases with name, note count, and privacy flag."""
+    registry = kb_mod.get_registry()
+    lines = []
+    for kbc in registry.all_kbs():
+        notes = list(kbc.notes_dir.glob("*.md")) if kbc.notes_dir.exists() else []
+        privacy = " [PRIVATE]" if kbc.private else ""
+        default = " [DEFAULT]" if kbc.default else ""
+        lines.append(f"  {kbc.name}{default}{privacy} — {len(notes)} notes ({kbc.notes_dir})")
+    return f"Available KBs ({len(lines)}):\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def kb_search(query: str, reformulations: list[str] | None = None, tags: str | None = None, type: str | None = None, kb: str | None = None) -> str:
     """Search the knowledge base using hybrid TF-IDF + graph expansion.
 
     Args:
@@ -75,15 +104,16 @@ def kb_search(query: str, reformulations: list[str] | None = None, tags: str | N
         reformulations: Optional alternative phrasings for multi-query fusion (improves recall)
         tags: Comma-separated tag filter (e.g. "scam-detection,fraud")
         type: Note type filter (concept, question, insight, reference, synthesis)
+        kb: Target a specific KB by name; omit to search unified index
     """
     _ensure_index_fresh()
     tag_list = tags.split(",") if tags else None
 
     if reformulations:
         all_queries = [query] + reformulations
-        results = kb.multi_search(all_queries, tags=tag_list, note_type=type)
+        results = kb_mod.multi_search(all_queries, tags=tag_list, note_type=type, kb_name=kb)
     else:
-        results = kb.search(query, tags=tag_list, note_type=type)
+        results = kb_mod.search(query, tags=tag_list, note_type=type, kb_name=kb)
 
     if not results:
         return "No results found. Try different keywords or check `kb_map()` for available topics."
@@ -97,7 +127,7 @@ def kb_search(query: str, reformulations: list[str] | None = None, tags: str | N
 
 
 @mcp.tool()
-def kb_quick(query: str) -> str:
+def kb_quick(query: str, kb: str | None = None) -> str:
     """Fast title/slug/tag lookup — no TF-IDF, instant results.
 
     Use for specific terms, note names, or concept lookups.
@@ -105,9 +135,10 @@ def kb_quick(query: str) -> str:
 
     Args:
         query: The term or concept to look up
+        kb: Target a specific KB by name; omit to search all KB metadata
     """
     _ensure_index_fresh()
-    results = kb.quick_search(query)
+    results = kb_mod.quick_search(query, kb_name=kb)
 
     if not results:
         return f"No quick matches for '{query}'. Use kb_search() for full semantic search."
@@ -120,23 +151,42 @@ def kb_quick(query: str) -> str:
 
 
 @mcp.tool()
-def kb_read(slug: str) -> str:
+def kb_read(slug: str, kb: str | None = None) -> str:
     """Read the full content of a specific note.
 
     Args:
         slug: The note slug (filename without .md), e.g. "tcp-congestion-control"
+        kb: Target a specific KB by name; omit to search all non-private KBs
     """
-    note_path = kb.NOTES / f"{slug}.md"
-    if not note_path.exists():
-        return f"Note '{slug}' not found. Use kb_search() or kb_quick() to find notes."
-    return note_path.read_text()
+    registry = kb_mod.get_registry()
+
+    if kb:
+        kbc = registry.get(kb)
+        if not kbc:
+            return f"Unknown KB '{kb}'. Available: {', '.join(registry.all_kb_names())}"
+        note_path = kbc.notes_dir / f"{slug}.md"
+        if not note_path.exists():
+            return f"Note '{slug}' not found in KB '{kb}'. Use kb_search() or kb_quick() to find notes."
+        return note_path.read_text()
+
+    # Search all non-private KBs for the slug
+    for kbc in registry.searchable_kbs():
+        note_path = kbc.notes_dir / f"{slug}.md"
+        if note_path.exists():
+            return note_path.read_text()
+
+    return f"Note '{slug}' not found. Use kb_search() or kb_quick() to find notes."
 
 
 @mcp.tool()
-def kb_map() -> str:
-    """Show the topic map — all knowledge clusters with note counts, type distribution, and link density."""
+def kb_map(kb: str | None = None) -> str:
+    """Show the topic map — all knowledge clusters with note counts, type distribution, and link density.
+
+    Args:
+        kb: Target a specific KB by name; omit for unified view
+    """
     _ensure_index_fresh()
-    tmap = kb.topic_map()
+    tmap = kb_mod.topic_map(kb_name=kb)
 
     if not tmap:
         return "No topic map available. The KB may be empty."
@@ -153,20 +203,32 @@ def kb_map() -> str:
 
 
 @mcp.tool()
-def kb_explore(slug: str, max_steps: int = 5) -> str:
+def kb_explore(slug: str, max_steps: int = 5, kb: str | None = None) -> str:
     """Suggest a reading path starting from a note, following the most relevant links.
 
     Args:
         slug: Starting note slug
         max_steps: Maximum number of notes in the path (default 5)
+        kb: Target a specific KB by name; omit for unified view
     """
     _ensure_index_fresh()
-    path = kb.explore_path(slug, max_steps)
+    path = kb_mod.explore_path(slug, max_steps, kb_name=kb)
 
     if not path:
         return f"No path from '{slug}'. The note may not exist or have no links."
 
-    metadata = json.loads(kb.META_FILE.read_text())
+    # Load metadata for display
+    registry = kb_mod.get_registry()
+    if kb:
+        kbc = registry.get(kb)
+        meta_file = kbc.meta_file if kbc else None
+    else:
+        meta_file = kb_mod.UNIFIED_DIR / "metadata.json"
+
+    metadata = {}
+    if meta_file and meta_file.exists():
+        metadata = json.loads(meta_file.read_text())
+
     lines = [f"Reading path from '{slug}' ({len(path)} notes):\n"]
     for i, s in enumerate(path):
         meta = metadata.get(s, {})
@@ -177,10 +239,14 @@ def kb_explore(slug: str, max_steps: int = 5) -> str:
 
 
 @mcp.tool()
-def kb_gaps() -> str:
-    """Find thin or weak topic areas in the KB that need more coverage."""
+def kb_gaps(kb: str | None = None) -> str:
+    """Find thin or weak topic areas in the KB that need more coverage.
+
+    Args:
+        kb: Target a specific KB by name; omit for unified view
+    """
     _ensure_index_fresh()
-    gaps = kb.find_topic_gaps()
+    gaps = kb_mod.find_topic_gaps(kb_name=kb)
 
     if not gaps:
         return "No significant topic gaps found."
@@ -195,15 +261,32 @@ def kb_gaps() -> str:
 
 
 @mcp.tool()
-def kb_stats() -> str:
-    """Show KB index statistics: note counts, types, features, embeddings, graph, top tags."""
+def kb_stats(kb: str | None = None) -> str:
+    """Show KB index statistics: note counts, types, features, embeddings, graph, top tags.
+
+    Args:
+        kb: Target a specific KB by name; omit for unified stats
+    """
     _ensure_index_fresh()
 
-    if not kb.META_FILE.exists():
+    registry = kb_mod.get_registry()
+    if kb:
+        kbc = registry.get(kb)
+        if not kbc:
+            return f"Unknown KB '{kb}'. Available: {', '.join(registry.all_kb_names())}"
+        meta_file = kbc.meta_file
+        index_file = kbc.index_file
+        graph_file = kbc.graph_file
+    else:
+        meta_file = kb_mod.UNIFIED_DIR / "metadata.json"
+        index_file = kb_mod.UNIFIED_DIR / "tfidf_index.json"
+        graph_file = kb_mod.UNIFIED_DIR / "graph.json"
+
+    if not meta_file.exists():
         return "No index. The KB may be empty."
 
-    metadata = json.loads(kb.META_FILE.read_text())
-    index_data = json.loads(kb.INDEX_FILE.read_text())
+    metadata = json.loads(meta_file.read_text())
+    index_data = json.loads(index_file.read_text())
 
     types = {}
     all_tags = {}
@@ -220,7 +303,9 @@ def kb_stats() -> str:
             deprecated += 1
 
     total = len(metadata)
+    label = f"KB: {kb}" if kb else "Unified (all KBs)"
     lines = [
+        label,
         f"Notes: {total}",
         f"Features: {index_data.get('feature_count', 'unknown')}",
         f"Total words: {total_words:,}",
@@ -232,8 +317,8 @@ def kb_stats() -> str:
         pct = count / total * 100 if total else 0
         lines.append(f"  {t:12s} {count:4d} ({pct:4.1f}%)")
 
-    if kb.GRAPH_FILE.exists():
-        g = json.loads(kb.GRAPH_FILE.read_text())
+    if graph_file.exists():
+        g = json.loads(graph_file.read_text())
         lines.append(f"Link graph: {g['node_count']} nodes, {g['edge_count']} edges, {g['orphan_count']} orphans")
 
     top_tags = dict(sorted(all_tags.items(), key=lambda x: -x[1])[:15])
@@ -243,7 +328,7 @@ def kb_stats() -> str:
 
 
 @mcp.tool()
-def kb_coverage(topic: str) -> str:
+def kb_coverage(topic: str, kb: str | None = None) -> str:
     """Check if the KB has adequate coverage of a topic.
 
     Returns coverage level (well-covered, partially-covered, not-covered)
@@ -251,9 +336,10 @@ def kb_coverage(topic: str) -> str:
 
     Args:
         topic: The topic to check coverage for
+        kb: Target a specific KB by name; omit for unified check
     """
     _ensure_index_fresh()
-    result = kb.check_coverage(topic)
+    result = kb_mod.check_coverage(topic, kb_name=kb)
 
     lines = [f"Coverage: {result.get('level', 'unknown')} (confidence: {result.get('confidence', 0)})"]
     if result.get("notes"):

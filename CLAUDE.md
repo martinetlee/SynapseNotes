@@ -1,24 +1,57 @@
 # Knowledge Base System
 
-A Claude-powered knowledge base using Obsidian-compatible markdown notes.
+A Claude-powered multi-KB knowledge base using Obsidian-compatible markdown notes.
 
 ## Project Structure
 
 ```
-notes/           — All atomic notes (flat, one concept per file)
-references/      — Source material for ingestion (READ-ONLY — never modify)
-publish/         — Generated HTML reports for sharing
-.kb/config.yaml  — KB settings and all tunable thresholds
-.kb/taxonomy.yaml — Loose tag registry (descriptive, not prescriptive)
-.kb/index/       — Search index (TF-IDF vectors, metadata, link graph)
+kbs.yaml             — KB registry (declares all KBs and their properties)
+kbs/
+  general/           — Default KB for cross-cutting concepts
+  personal/          — Private notes (gitignored)
+  blockchain-security/  — Domain KB
+references/          — Source material for ingestion (READ-ONLY — shared across all KBs)
+publish/             — Generated HTML reports for sharing
+.kb/config.yaml      — KB settings and all tunable thresholds
+.kb/taxonomy.yaml    — Loose tag registry (shared across all KBs)
+.kb/index/
+  general/           — Per-KB search index
+  personal/
+  blockchain-security/
+  _unified/          — Merged cross-KB index
+.kb/kb-index.py      — Search index, linter, link graph, and query engine
 .kb/build-report.py  — HTML report builder (uses python-markdown)
-.kb/kb-index.py  — Search index, linter, link graph, and query engine
-.claude/skills/  — Claude Code skill definitions
+.kb/mcp_server.py    — Read-only MCP server for external tools
+.claude/skills/      — Claude Code skill definitions
+tests/               — Retrieval and generation eval harness
 ```
+
+## Multi-KB Architecture
+
+The system supports multiple knowledge bases with different purposes and access levels. Each KB is a directory under `kbs/` declared in `kbs.yaml`:
+
+```yaml
+kbs:
+  general:
+    path: kbs/general
+    default: true           # where notes go if no KB specified
+  personal:
+    path: kbs/personal
+    private: true           # gitignored, excluded from MCP and default search
+  blockchain-security:
+    path: kbs/blockchain-security
+```
+
+**Key rules:**
+- All CLI commands support `--kb <name>` to scope to a specific KB
+- Reads/searches without `--kb` use the unified index (all non-private KBs)
+- Writes without `--kb` default to `general`
+- Private KBs are excluded from MCP and unified search unless explicitly requested
+- New domain KBs: add an entry to `kbs.yaml` and `mkdir kbs/<name>/`
 
 ## Read-Only Directories
 
-**`references/`** — Contains structured summaries of source material (papers, articles, docs). Each file has the external URL at the top (`Source: https://...`) and a summary of key content. Claude may **write new files** here, but must **never edit or delete existing files**. Notes cite these local files rather than external URLs directly — the reference file is the bridge between the KB and the outside world.
+**`references/`** — Shared across all KBs. Contains structured summaries of source material (papers, articles, docs). Each file has the external URL at the top (`Source: https://...`) and a summary of key content. Claude may **write new files** here, but must **never edit or delete existing files**. Notes cite these local files rather than external URLs directly.
 
 ## Note Format
 
@@ -56,12 +89,12 @@ related: []
 
 1. **Atomic**: One concept per note. If a topic has multiple distinct concepts, create multiple notes.
 2. **Slugified filenames**: `tcp-congestion-control.md`, lowercase, hyphens for spaces.
-3. **Wikilinks**: Use `[[note-name]]` (without `.md`) to link related notes. Add links in both directions.
+3. **Wikilinks**: Use `[[note-name]]` (without `.md`) to link related notes within the same KB. For cross-KB links: `[[kb-name:note-name]]`. Add links in both directions.
 4. **Tags**: Use existing tags from taxonomy.yaml when applicable. Create new tags freely when needed.
 5. **Update vs Create**: When a closely related note exists, update it if the new info deepens the same concept. Create a new note + link if it's a distinct concept.
 6. **Key Takeaways**: Always end with bullet-point takeaways for quick scanning.
-7. **Sources**: Frontmatter `sources` is a list of local reference file paths (e.g. `../references/filename.md`). These are the authoritative source pointers for the note.
-8. **Citations**: Always cite sources inline by linking to the local reference file: `[display text](../references/filename.md)`. The reference file itself contains the external URL. This keeps the KB self-contained and offline-verifiable. For sources not saved locally, use `[text](url)` as a fallback, but prefer saving substantive sources to `references/` first.
+7. **Sources**: Frontmatter `sources` is a list of local reference file paths (e.g. `../../references/filename.md`). These are the authoritative source pointers for the note. Note: two levels up from `kbs/<name>/`.
+8. **Citations**: Always cite sources inline by linking to the local reference file: `[display text](../../references/filename.md)`. The reference file itself contains the external URL. This keeps the KB self-contained and offline-verifiable. For sources not saved locally, use `[text](url)` as a fallback, but prefer saving substantive sources to `references/` first.
 
 ## Session Log
 
@@ -71,35 +104,36 @@ Format: `## [YYYY-MM-DD] type | Title` followed by bullet points.
 
 ## Infrastructure Commands
 
-All commands via `python3 .kb/kb-index.py <command>`:
+All commands via `python3 .kb/kb-index.py <command> [--kb <name>]`:
 
 | Command | Purpose |
 |---|---|
-| `build` | Full index rebuild (TF-IDF + clusters + link graph) |
-| `build --incremental` | Only re-index changed notes (compares content hashes) |
-| `build --embed` | Also build dense embeddings |
-| `search "query"` | Hybrid search with optional `--tags`, `--type` filters |
-| `similar <slug>` | Find notes similar to a given note |
-| `coverage "topic"` | Check if KB covers a topic |
-| `contradictions <slug>` | Find potentially conflicting notes |
-| `stale [days]` | Find temporally stale notes |
-| `stale-syntheses` | Find synthesis notes with updated dependencies |
-| `stats` | Index statistics with type distribution |
-| `clusters` | Show topic clusters |
-| `lint [slug]` | Validate notes (frontmatter, links, citations, tags) |
-| `graph` | Link graph summary |
-| `graph orphans` | Notes with no links in or out |
-| `graph components` | Disconnected subgraphs |
+| `build [--kb name]` | Full index rebuild (per-KB + unified) |
+| `build --incremental [--kb name]` | Only re-index changed notes |
+| `build --embed [--kb name]` | Also build dense embeddings |
+| `search "query" [--kb name]` | Hybrid search (unified or scoped) |
+| `search "query" --multi "alt1" "alt2"` | Multi-query fusion search |
+| `similar <slug> [--kb name]` | Find notes similar to a given note |
+| `coverage "topic" [--kb name]` | Check if KB covers a topic |
+| `contradictions <slug> [--kb name]` | Find potentially conflicting notes |
+| `stale [days] [--kb name]` | Find temporally stale notes |
+| `stale-syntheses [--kb name]` | Find synthesis notes with updated dependencies |
+| `stats [--kb name]` | Index statistics with type distribution |
+| `clusters [--kb name]` | Show topic clusters |
+| `lint [slug] [--kb name]` | Validate notes (frontmatter, links, citations, tags) |
+| `graph [--kb name]` | Link graph summary |
+| `graph orphans [--kb name]` | Notes with no links in or out |
+| `graph components [--kb name]` | Disconnected subgraphs |
 | `graph neighbors <slug> [n]` | Notes within n hops |
-| `graph bridges` | Critical connector notes |
-| `quick "query"` | Fast title/slug/tag match (no TF-IDF) |
-| `backlink [slug]` | Add missing reverse wikilinks |
+| `graph bridges [--kb name]` | Critical connector notes |
+| `quick "query" [--kb name]` | Fast title/slug/tag match (no TF-IDF) |
+| `backlink [slug] [--kb name]` | Add missing reverse wikilinks |
 | `feedback summary` | Show accumulated search feedback |
 | `feedback log "q" "type" "slugs"` | Log a search quality issue |
-| `map` | Topic map with coverage and link density |
+| `map [--kb name]` | Topic map with coverage and link density |
 | `explore <slug> [steps]` | Suggested reading path from a note |
-| `gaps` | Find thin/weak topic areas |
-| `eval` | Run retrieval evaluation (Recall@5, MRR, nDCG@5) |
+| `gaps [--kb name]` | Find thin/weak topic areas |
+| `eval [--kb name]` | Run retrieval evaluation (Recall@5, MRR, nDCG@5) |
 | `eval generation` | Run faithfulness + relevancy checks (requires OPENAI_API_KEY) |
 | `eval all --verbose` | Run all evaluations with per-query detail |
 
@@ -109,7 +143,9 @@ The KB exposes a read-only MCP server for external tools (Claude Code from other
 
 **Start:** `uv run --directory .kb python mcp_server.py`
 
-**Tools:** `kb_search`, `kb_quick`, `kb_read`, `kb_map`, `kb_explore`, `kb_gaps`, `kb_stats`, `kb_coverage`
+**Tools:** `kb_search`, `kb_quick`, `kb_read`, `kb_list`, `kb_map`, `kb_explore`, `kb_gaps`, `kb_stats`, `kb_coverage`
+
+All MCP tools accept an optional `kb` parameter to scope to a specific KB. Private KBs are excluded from default search.
 
 **Configure in Claude Code** (add to `~/.claude/settings.json` under `mcpServers`):
 ```json
@@ -130,9 +166,11 @@ The server auto-rebuilds the index if notes have changed since the last build (c
 
 `.kb/config.yaml` contains all tunable thresholds for search, coverage, similarity, clustering, staleness, and indexing. Skills read from this config — do not hard-code thresholds in skill prompts or scripts.
 
+`kbs.yaml` at the project root declares all KBs. To add a new KB: add an entry to `kbs.yaml` and create the directory.
+
 ## Backup
 
-Run `.kb/backup.sh` to back up notes and references to `~/.kb-backups/`. Keeps last 10 timestamped backups.
+Run `.kb/backup.sh` to back up all KBs and references to `~/.kb-backups/`. Keeps last 10 timestamped backups.
 
 ## KB Role
 

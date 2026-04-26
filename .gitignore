@@ -1,17 +1,22 @@
-notes/*
-!notes/.gitkeep
+# KB content — all KBs are content, not machinery
+kbs/*/
+
+# Shared content
 references/*
 !references/.gitkeep
 publish/*
 !publish/.gitkeep
+
+# Index and runtime data
 .kb/index/
-.obsidian/
-.DS_Store
-*.canvas
-Untitled.canvas
-__pycache__/
-.kb/__pycache__/
 .kb/log.md
 .kb/taxonomy.yaml
 .kb/index/feedback.jsonl
+__pycache__/
+.kb/__pycache__/
 tests/*_results.json
+
+# Editor / OS
+.obsidian/
+.DS_Store
+*.canvas

@@ -2,12 +2,14 @@
 name: kb-publish
 description: Publish KB notes or synthesized reports as interactive HTML
 user_invocable: true
-arguments: "Note name, research hub name, or --explain topic"
+arguments: "Note name, research hub name, or --explain topic. Optional: --kb <name> to specify which KB the note is in"
 ---
 
 # /kb-publish
 
 Publish KB content as a self-contained interactive HTML report.
+
+**KB resolution**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, look for the note in `kbs/<kb_name>/`. If not specified, search all KBs (`kbs/*/`) for the note. If found in multiple KBs, ask the user which one to use.
 
 ## Modes
 
@@ -20,7 +22,7 @@ Publish KB content as a self-contained interactive HTML report.
 ### 1. Determine mode and gather content
 
 **Single note mode:**
-- Read the specified note from `notes/`
+- Read the specified note from the resolved KB directory (`kbs/<kb_name>/`)
 - Read any notes in its `related:` frontmatter for wikilink resolution
 
 **Hub mode:**
@@ -41,7 +43,7 @@ a. **Wikilinks** `[[note-name]]` or `[[note-name|display text]]`:
    - If the linked note is included in the report → convert to a clickable anchor: `<a class="wikilink" href="#note-name" data-target="note-name">display text</a>`
    - If not included → render as plain bold text
 
-b. **Reference citations** `[display text](../references/filename.md)`:
+b. **Reference citations** `[display text](../../references/filename.md)`:
    - Read the reference file to extract the `Source:` URL
    - Convert to a numbered footnote: `<span class="footnote-ref" data-fn="N">[N]</span>`
    - Add to footnotes list: `<li id="fn-N"><a href="URL">Display text</a> — Source title</li>`

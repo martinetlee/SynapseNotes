@@ -1,0 +1,22 @@
+# Knowledge Base Registry
+# Declares all KBs with their paths and properties.
+# kb-index.py, mcp_server.py, and skills read this to discover KBs.
+
+kbs:
+  general:
+    path: kbs/general
+    default: true
+    description: "General knowledge base — cross-cutting concepts, tools, frameworks"
+
+  personal:
+    path: kbs/personal
+    private: true
+    description: "Private notes — career, people, decisions (gitignored)"
+
+  blockchain-security:
+    path: kbs/blockchain-security
+    description: "Blockchain security, auditing, ZK systems"
+
+# Shared across all KBs
+taxonomy: shared        # single .kb/taxonomy.yaml
+references: shared      # single references/ pool

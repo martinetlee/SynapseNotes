@@ -2,17 +2,19 @@
 name: kb-search
 description: Search the knowledge base and synthesize an answer from matching notes
 user_invocable: true
-arguments: The search query
+arguments: "The search query. Optional: --kb <name> to search a specific KB (default: all non-private KBs)"
 ---
 
 # /kb-search
 
 Search the knowledge base for notes relevant to the user's query and synthesize a grounded answer.
 
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, search only that KB. If not specified, search all non-private KBs (unified index). Pass `--kb <name>` to `kb-index.py` commands when scoping to a single KB.
+
 ## Steps
 
 1. **Assess query complexity** — Decide the retrieval tier:
-   - **Quick lookup** (query is a specific term, name, or concept): Run `python3 .kb/kb-index.py quick "QUERY"` first. If it returns a clear match (score > 3.0), read that note and answer directly — skip full search.
+   - **Quick lookup** (query is a specific term, name, or concept): Run `python3 .kb/kb-index.py quick "QUERY" [--kb <name>]` first. If it returns a clear match (score > 3.0), read that note and answer directly — skip full search.
    - **Full search** (query needs synthesis across multiple notes): proceed to step 2.
 
 2. **Multi-query search** — Generate 2-3 alternative phrasings of the user's query to overcome vocabulary mismatch. The original query may use different words than the notes.
@@ -23,7 +25,7 @@ Search the knowledge base for notes relevant to the user's query and synthesize 
 
    Run with multi-query fusion:
    ```
-   python3 .kb/kb-index.py search "ORIGINAL QUERY" --multi "REFORMULATION 1" "REFORMULATION 2"
+   python3 .kb/kb-index.py search "ORIGINAL QUERY" --multi "REFORMULATION 1" "REFORMULATION 2" [--kb <name>]
    ```
 
    **How to reformulate**: Use synonyms, technical terms, related concepts, and different phrasings of the same intent. Think about what words the note *titles* and *tags* would use, not just how a human would phrase the question. Check `.kb/taxonomy.yaml` for relevant tags.
@@ -34,7 +36,7 @@ Search the knowledge base for notes relevant to the user's query and synthesize 
    - `--tags tag1,tag2` to restrict by tags
    - `--type concept` to restrict by note type
 
-3. **Check coverage** — Run `python3 .kb/kb-index.py coverage "QUERY"` to assess if the KB has adequate coverage.
+3. **Check coverage** — Run `python3 .kb/kb-index.py coverage "QUERY" [--kb <name>]` to assess if the KB has adequate coverage.
 
    Coverage levels (thresholds configured in `.kb/config.yaml` under `coverage:`):
    - **well-covered**: proceed to synthesis
@@ -81,7 +83,7 @@ After drafting the answer, self-check:
 
 If the user indicates the results were wrong or incomplete, log feedback:
 ```
-python3 .kb/kb-index.py feedback log "QUERY" "FAILURE_TYPE" "expected_slug1,slug2" "notes"
+python3 .kb/kb-index.py feedback log "QUERY" "FAILURE_TYPE" "expected_slug1,slug2" "notes" [--kb <name>]
 ```
 Failure types: `missed` (relevant note not retrieved), `wrong` (irrelevant note ranked high), `stale` (outdated note returned), `irrelevant` (answer didn't address the question).
 

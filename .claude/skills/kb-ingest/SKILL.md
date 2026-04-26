@@ -2,12 +2,14 @@
 name: kb-ingest
 description: Extract atomic notes from files in references/ or from URLs (fetched content saved to references/)
 user_invocable: true
-arguments: Filename in references/, glob pattern, or URL to fetch
+arguments: "Filename in references/, glob pattern, or URL to fetch. Optional: --kb <name> to target a specific KB (default: general)"
 ---
 
 # /kb-ingest
 
 Ingest source material and extract atomic knowledge base notes.
+
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, default to `general`. Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
 
 ## Steps
 
@@ -66,10 +68,10 @@ Ingest source material and extract atomic knowledge base notes.
 
 7. **Create selected concept notes** — For each selected candidate:
 
-   a. Search existing notes for overlap (Glob + Grep in `notes/`)
+   a. Search existing notes for overlap (Glob + Grep in `kbs/<kb_name>/` and other KBs)
    b. If a closely related note exists, show the user and ask: update existing or create new?
-   c. Create/update the note following CLAUDE.md format
-   d. **Cite the source inline** — every claim must have a citation: `[text](references/filename)` or `(Source: Title, p.123)`
+   c. Create/update the note in `kbs/<kb_name>/` following CLAUDE.md format
+   d. **Cite the source inline** — every claim must have a citation: `[text](../../references/filename.md)` (two levels up from `kbs/<kb_name>/`) or `(Source: Title, p.123)`
    e. Include the source file path in `sources` frontmatter
    f. Add `[[wikilinks]]` to the hub note and any other related notes, in both directions
 

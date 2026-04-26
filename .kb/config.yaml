@@ -1,5 +1,5 @@
 # Knowledge Base Configuration
-notes_dir: notes
+# KB registry is in kbs.yaml (not here). This file is for tunable thresholds only.
 naming: slugified  # slugified title, e.g. tcp-congestion-control.md
 note_types:
   - question

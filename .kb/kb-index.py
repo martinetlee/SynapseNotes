@@ -2,22 +2,27 @@
 """KB search index: build, query, lint, and maintain.
 
 Usage:
-  python3 .kb/kb-index.py build                    # Build/rebuild TF-IDF index
+  python3 .kb/kb-index.py build                    # Build all per-KB indices + unified
+  python3 .kb/kb-index.py build --kb general        # Build index for one KB only
   python3 .kb/kb-index.py build --embed            # Also build dense embeddings
   python3 .kb/kb-index.py build --incremental      # Only re-index changed notes
-  python3 .kb/kb-index.py search "query text"      # Hybrid search (top 10)
+  python3 .kb/kb-index.py search "query text"      # Hybrid search unified index (top 10)
+  python3 .kb/kb-index.py search "query" --kb general  # Search specific KB
   python3 .kb/kb-index.py search "query" --tags security,rag  # With tag filter
   python3 .kb/kb-index.py search "query" --type concept       # With type filter
   python3 .kb/kb-index.py search "query" --multi "alt query 1" "alt query 2"  # Multi-query fusion
-  python3 .kb/kb-index.py similar note-slug         # Find similar notes
+  python3 .kb/kb-index.py similar note-slug         # Find similar notes (unified)
+  python3 .kb/kb-index.py similar note-slug --kb general  # Find similar in specific KB
   python3 .kb/kb-index.py stale                     # Find temporally stale notes
   python3 .kb/kb-index.py stale-syntheses           # Find synthesis notes with updated dependencies
   python3 .kb/kb-index.py contradictions note-slug  # Find potentially conflicting notes
   python3 .kb/kb-index.py coverage "topic"          # Check if KB covers a topic
-  python3 .kb/kb-index.py stats                     # Index statistics
+  python3 .kb/kb-index.py stats                     # Index statistics (all KBs)
+  python3 .kb/kb-index.py stats --kb general        # Stats for one KB
   python3 .kb/kb-index.py clusters                  # Show topic clusters
-  python3 .kb/kb-index.py lint                      # Validate all notes
+  python3 .kb/kb-index.py lint                      # Validate all notes in all KBs
   python3 .kb/kb-index.py lint note-slug            # Validate a single note
+  python3 .kb/kb-index.py lint --kb general         # Lint one KB
   python3 .kb/kb-index.py graph                     # Show graph summary
   python3 .kb/kb-index.py graph orphans             # Notes with no links in or out
   python3 .kb/kb-index.py graph components          # Disconnected subgraphs
@@ -33,6 +38,9 @@ Usage:
   python3 .kb/kb-index.py eval                       # Run retrieval evaluation
   python3 .kb/kb-index.py eval generation            # Run generation (faithfulness) evaluation
   python3 .kb/kb-index.py eval all --verbose         # Run all evaluations with details
+
+Global flag:
+  --kb <name>    Target a specific KB (default: unified/all depending on command)
 
 Dense embeddings require OPENAI_API_KEY or VOYAGE_API_KEY in environment.
 Falls back to TF-IDF-only when no API key is available.
@@ -53,24 +61,98 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 BASE = Path(__file__).parent.parent
-NOTES = BASE / "notes"
+
+# ---------------------------------------------------------------------------
+# KB Registry — multi-KB support
+# ---------------------------------------------------------------------------
+
+REGISTRY_FILE = BASE / "kbs.yaml"
+
+
+class KBConfig:
+    """Configuration for a single KB."""
+    def __init__(self, name, path, private=False, default=False):
+        self.name = name
+        self.notes_dir = BASE / path
+        self.private = private
+        self.default = default
+        self.index_dir = BASE / ".kb" / "index" / name
+        # Per-KB index files
+        self.index_file = self.index_dir / "tfidf_index.json"
+        self.vectors_file = self.index_dir / "tfidf_vectors.npz"
+        self.vectorizer_file = self.index_dir / "vectorizer.pkl"
+        self.embeddings_file = self.index_dir / "dense_embeddings.npz"
+        self.meta_file = self.index_dir / "metadata.json"
+        self.clusters_file = self.index_dir / "clusters.json"
+        self.graph_file = self.index_dir / "graph.json"
+
+
+class KBRegistry:
+    def __init__(self):
+        self.kbs = {}
+        self._load()
+
+    def _load(self):
+        if REGISTRY_FILE.exists():
+            raw = yaml.safe_load(REGISTRY_FILE.read_text()) or {}
+            for name, cfg in raw.get("kbs", {}).items():
+                self.kbs[name] = KBConfig(
+                    name=name, path=cfg["path"],
+                    private=cfg.get("private", False),
+                    default=cfg.get("default", False),
+                )
+        if not self.kbs:
+            # Fallback: single-KB mode for backward compat
+            self.kbs["general"] = KBConfig("general", "kbs/general", default=True)
+
+    def get(self, name): return self.kbs.get(name)
+    def all_kbs(self): return list(self.kbs.values())
+    def searchable_kbs(self): return [kb for kb in self.kbs.values() if not kb.private]
+    def all_kb_names(self): return list(self.kbs.keys())
+    def default_kb(self):
+        for kb in self.kbs.values():
+            if kb.default:
+                return kb
+        return list(self.kbs.values())[0] if self.kbs else None
+
+
+_registry = None
+
+
+def get_registry():
+    global _registry
+    if _registry is None:
+        _registry = KBRegistry()
+    return _registry
+
+
+def resolve_kb(kb_name=None):
+    """Get KBConfig for a given kb_name, or default KB if None."""
+    reg = get_registry()
+    if kb_name:
+        kb = reg.get(kb_name)
+        if not kb:
+            print(f"Unknown KB: {kb_name}. Available: {', '.join(reg.all_kb_names())}", file=sys.stderr)
+            sys.exit(1)
+        return kb
+    return reg.default_kb()
+
+
+# Unified index directory
+UNIFIED_DIR = BASE / ".kb" / "index" / "_unified"
+
+# Backward compat — shared paths (KB-independent)
 REFS = BASE / "references"
-INDEX_DIR = BASE / ".kb" / "index"
-INDEX_FILE = INDEX_DIR / "tfidf_index.json"
-VECTORS_FILE = INDEX_DIR / "tfidf_vectors.npz"
-VECTORIZER_FILE = INDEX_DIR / "vectorizer.pkl"
-EMBEDDINGS_FILE = INDEX_DIR / "dense_embeddings.npz"
-META_FILE = INDEX_DIR / "metadata.json"
-CLUSTERS_FILE = INDEX_DIR / "clusters.json"
-GRAPH_FILE = INDEX_DIR / "graph.json"
 CONFIG_FILE = BASE / ".kb" / "config.yaml"
 TAXONOMY_FILE = BASE / ".kb" / "taxonomy.yaml"
+FEEDBACK_FILE = BASE / ".kb" / "index" / "feedback.jsonl"
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 _config_cache = None
+
 
 def load_config():
     """Load config.yaml with defaults for every key."""
@@ -118,7 +200,7 @@ def load_config():
 
 
 def cfg(section, key):
-    """Shorthand: cfg('search', 'rrf_constant') → 60"""
+    """Shorthand: cfg('search', 'rrf_constant') -> 60"""
     return load_config()[section][key]
 
 
@@ -144,8 +226,25 @@ def parse_note(filepath):
 
 
 def extract_wikilinks(text):
-    """Extract all [[target]] wikilinks from text (body or frontmatter related list)."""
-    return re.findall(r'\[\[([^\]|]+?)(?:\|[^\]]*?)?\]\]', text)
+    """Extract [[target]] or [[kb:target]] wikilinks.
+
+    Returns list of (kb_part, slug) tuples.
+    kb_part is None for plain [[slug]] links.
+    """
+    raw = re.findall(r'\[\[([^\]|]+?)(?:\|[^\]]*?)?\]\]', text)
+    results = []
+    for link in raw:
+        if ':' in link and not link.startswith('http'):
+            kb_part, slug = link.split(':', 1)
+            results.append((kb_part, slug))
+        else:
+            results.append((None, link))
+    return results
+
+
+def extract_wikilink_slugs(text):
+    """Extract just the slug part of wikilinks (ignoring kb prefix)."""
+    return [slug for _, slug in extract_wikilinks(text)]
 
 
 def extract_contextual_text(fm, body):
@@ -169,24 +268,24 @@ def extract_contextual_text(fm, body):
 # Build index
 # ---------------------------------------------------------------------------
 
-def build_index(incremental=False):
-    """Build TF-IDF index over all notes with contextual metadata prepending.
+def _build_single_kb(kb_config, incremental=False):
+    """Build TF-IDF index for a single KB.
 
-    If incremental=True, compare content hashes against existing metadata and
-    only re-process changed/added notes.  Falls back to full rebuild when the
-    vocabulary drifts beyond the configured threshold.
+    Returns (slugs, texts, metadata) for use by unified index builder,
+    or None if no notes found.
     """
-    notes = sorted(NOTES.glob("*.md"))
+    notes = sorted(kb_config.notes_dir.glob("*.md"))
     if not notes:
-        print("No notes found.")
-        return
+        print(f"[{kb_config.name}] No notes found in {kb_config.notes_dir}.")
+        return None
 
     # --- Incremental: detect changes ---
     old_metadata = {}
     changed_slugs = set()
     deleted_slugs = set()
-    if incremental and META_FILE.exists() and VECTORS_FILE.exists() and VECTORIZER_FILE.exists():
-        old_metadata = json.loads(META_FILE.read_text())
+    if (incremental and kb_config.meta_file.exists()
+            and kb_config.vectors_file.exists() and kb_config.vectorizer_file.exists()):
+        old_metadata = json.loads(kb_config.meta_file.read_text())
         current_slugs = {p.stem for p in notes}
         deleted_slugs = set(old_metadata.keys()) - current_slugs
 
@@ -198,17 +297,29 @@ def build_index(incremental=False):
                 changed_slugs.add(slug)
 
         if not changed_slugs and not deleted_slugs:
-            print("Index is up to date (no changes detected).")
-            return
+            print(f"[{kb_config.name}] Index is up to date (no changes detected).")
+            # Still return data for unified build
+            metadata = old_metadata
+            slugs = sorted(metadata.keys())
+            texts = []
+            for slug in slugs:
+                path = kb_config.notes_dir / f"{slug}.md"
+                if path.exists():
+                    fm, body, _ = parse_note(path)
+                    texts.append(extract_contextual_text(fm, body))
+                else:
+                    texts.append("")
+            return slugs, texts, metadata
 
-        # Check if vocabulary would drift too much — if so, full rebuild
+        # Check if vocabulary would drift too much
         new_count = len(changed_slugs - set(old_metadata.keys()))
         drift = new_count / max(len(old_metadata), 1)
         if drift > cfg("indexing", "vocab_drift_threshold"):
-            print(f"Vocabulary drift {drift:.0%} exceeds threshold — full rebuild.")
+            print(f"[{kb_config.name}] Vocabulary drift {drift:.0%} exceeds threshold -- full rebuild.")
             incremental = False
         else:
-            print(f"Incremental: {len(changed_slugs)} changed, {len(deleted_slugs)} deleted, "
+            print(f"[{kb_config.name}] Incremental: {len(changed_slugs)} changed, "
+                  f"{len(deleted_slugs)} deleted, "
                   f"{len(current_slugs) - len(changed_slugs)} unchanged.")
 
     slugs = []
@@ -221,10 +332,10 @@ def build_index(incremental=False):
         contextual_text = extract_contextual_text(fm, body)
 
         # Extract all wikilinks (body + related frontmatter)
-        body_links = extract_wikilinks(body)
+        body_links = extract_wikilink_slugs(body)
         fm_links = []
         for r in fm.get("related", []):
-            fm_links.extend(extract_wikilinks(str(r)))
+            fm_links.extend(extract_wikilink_slugs(str(r)))
 
         slugs.append(slug)
         texts.append(contextual_text)
@@ -237,11 +348,12 @@ def build_index(incremental=False):
             "valid_from": str(fm.get("valid_from", "")),
             "valid_until": fm.get("valid_until"),
             "deprecated_by": fm.get("deprecated_by"),
-            "related": list(dict.fromkeys(fm_links)),  # deduplicated, ordered
+            "related": list(dict.fromkeys(fm_links)),
             "outgoing_links": list(dict.fromkeys(body_links + fm_links)),
             "content_hash": content_hash,
             "word_count": len(body.split()),
-            "depends_on": fm.get("depends_on", []),  # for synthesis notes
+            "depends_on": fm.get("depends_on", []),
+            "kb": kb_config.name,
         }
 
     # Build TF-IDF matrix
@@ -257,14 +369,14 @@ def build_index(incremental=False):
     tfidf_matrix = vectorizer.fit_transform(texts)
 
     # Save index
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    kb_config.index_dir.mkdir(parents=True, exist_ok=True)
 
-    np.savez_compressed(VECTORS_FILE,
+    np.savez_compressed(kb_config.vectors_file,
                         vectors=tfidf_matrix.toarray(),
                         slugs=np.array(slugs))
 
     import pickle
-    with open(VECTORIZER_FILE, "wb") as f:
+    with open(kb_config.vectorizer_file, "wb") as f:
         pickle.dump(vectorizer, f)
 
     index_data = {
@@ -272,16 +384,165 @@ def build_index(incremental=False):
         "built_at": datetime.now().isoformat(),
         "note_count": len(slugs),
         "feature_count": len(vectorizer.vocabulary_),
+        "kb": kb_config.name,
     }
-    INDEX_FILE.write_text(json.dumps(index_data, indent=2))
-    META_FILE.write_text(json.dumps(metadata, indent=2))
+    kb_config.index_file.write_text(json.dumps(index_data, indent=2))
+    kb_config.meta_file.write_text(json.dumps(metadata, indent=2))
 
-    # Build topic clusters + link graph
-    build_clusters(slugs, metadata)
-    build_graph(slugs, metadata)
+    # Build topic clusters + link graph for this KB
+    build_clusters(slugs, metadata, kb_config)
+    build_graph(slugs, metadata, kb_config)
 
-    print(f"Index built: {len(slugs)} notes, {len(vectorizer.vocabulary_)} features")
-    return tfidf_matrix, vectorizer, slugs, metadata
+    print(f"[{kb_config.name}] Index built: {len(slugs)} notes, {len(vectorizer.vocabulary_)} features")
+    return slugs, texts, metadata
+
+
+def build_unified_index(all_kb_data):
+    """Build a unified index across all searchable KBs.
+
+    all_kb_data: list of (kb_config, slugs, texts, metadata) tuples
+    """
+    unified_slugs = []
+    unified_texts = []
+    unified_metadata = {}
+
+    for kb_config, slugs, texts, metadata in all_kb_data:
+        for i, slug in enumerate(slugs):
+            qualified = f"{kb_config.name}:{slug}"
+            unified_slugs.append(qualified)
+            unified_texts.append(texts[i])
+            meta_copy = dict(metadata[slug])
+            meta_copy["kb"] = kb_config.name
+            unified_metadata[qualified] = meta_copy
+
+    if not unified_slugs:
+        print("[unified] No notes to index.")
+        return
+
+    # Build unified TF-IDF matrix
+    icfg = load_config()["indexing"]
+    vectorizer = TfidfVectorizer(
+        max_features=icfg["max_features"],
+        ngram_range=tuple(icfg["ngram_range"]),
+        min_df=icfg["min_df"],
+        max_df=icfg["max_df"],
+        sublinear_tf=True,
+        stop_words="english",
+    )
+    tfidf_matrix = vectorizer.fit_transform(unified_texts)
+
+    # Save unified index
+    UNIFIED_DIR.mkdir(parents=True, exist_ok=True)
+
+    np.savez_compressed(UNIFIED_DIR / "tfidf_vectors.npz",
+                        vectors=tfidf_matrix.toarray(),
+                        slugs=np.array(unified_slugs))
+
+    import pickle
+    with open(UNIFIED_DIR / "vectorizer.pkl", "wb") as f:
+        pickle.dump(vectorizer, f)
+
+    index_data = {
+        "slugs": unified_slugs,
+        "built_at": datetime.now().isoformat(),
+        "note_count": len(unified_slugs),
+        "feature_count": len(vectorizer.vocabulary_),
+        "kbs": [kbc.name for kbc, _, _, _ in all_kb_data],
+    }
+    (UNIFIED_DIR / "tfidf_index.json").write_text(json.dumps(index_data, indent=2))
+    (UNIFIED_DIR / "metadata.json").write_text(json.dumps(unified_metadata, indent=2))
+
+    # Merged graph
+    _build_unified_graph(all_kb_data, unified_slugs, unified_metadata)
+
+    # Merged clusters
+    _build_unified_clusters(unified_slugs, unified_metadata)
+
+    print(f"[unified] Index built: {len(unified_slugs)} notes from "
+          f"{len(all_kb_data)} KBs, {len(vectorizer.vocabulary_)} features")
+
+
+def _build_unified_graph(all_kb_data, unified_slugs, unified_metadata):
+    """Build merged graph across all KBs with qualified slugs."""
+    slug_set = set(unified_slugs)
+    adjacency = {}
+    for qs in unified_slugs:
+        adjacency[qs] = {"outgoing": [], "incoming": []}
+
+    # Build a mapping from bare slug to qualified slug(s) for cross-KB link resolution
+    bare_to_qualified = defaultdict(list)
+    for qs in unified_slugs:
+        _, bare = qs.split(":", 1)
+        bare_to_qualified[bare].append(qs)
+
+    for qs in unified_slugs:
+        kb_name = unified_metadata[qs]["kb"]
+        targets = unified_metadata[qs].get("outgoing_links", [])
+        seen = set()
+        for target in targets:
+            # Resolve: prefer same-KB, then any KB
+            same_kb_qualified = f"{kb_name}:{target}"
+            if same_kb_qualified in slug_set and same_kb_qualified != qs:
+                resolved = same_kb_qualified
+            else:
+                # Try any KB
+                candidates = [q for q in bare_to_qualified.get(target, []) if q != qs]
+                resolved = candidates[0] if candidates else None
+
+            if resolved and resolved not in seen:
+                adjacency[qs]["outgoing"].append(resolved)
+                adjacency[resolved]["incoming"].append(qs)
+                seen.add(resolved)
+
+    orphans = [s for s in unified_slugs
+               if not adjacency[s]["outgoing"] and not adjacency[s]["incoming"]]
+    total_edges = sum(len(adjacency[s]["outgoing"]) for s in unified_slugs)
+
+    graph_data = {
+        "built_at": datetime.now().isoformat(),
+        "node_count": len(unified_slugs),
+        "edge_count": total_edges,
+        "orphan_count": len(orphans),
+        "adjacency": adjacency,
+    }
+    (UNIFIED_DIR / "graph.json").write_text(json.dumps(graph_data, indent=2))
+    print(f"[unified] Graph built: {len(unified_slugs)} nodes, {total_edges} edges, {len(orphans)} orphans")
+
+
+def _build_unified_clusters(unified_slugs, unified_metadata):
+    """Build merged clusters across all KBs."""
+    build_clusters(
+        unified_slugs, unified_metadata,
+        kb_config=None,  # signals unified mode
+        output_file=UNIFIED_DIR / "clusters.json",
+    )
+
+
+def build_index(incremental=False, kb_name=None):
+    """Build TF-IDF index.
+
+    If kb_name is specified, build only that KB's index.
+    If kb_name is None, build all per-KB indices + unified.
+    """
+    reg = get_registry()
+
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        _build_single_kb(kb, incremental=incremental)
+        return
+
+    # Build all KBs
+    all_kb_data = []
+    for kb in reg.all_kbs():
+        result = _build_single_kb(kb, incremental=incremental)
+        if result is not None:
+            slugs, texts, metadata = result
+            if not kb.private:
+                all_kb_data.append((kb, slugs, texts, metadata))
+
+    # Build unified index from searchable KBs
+    if all_kb_data:
+        build_unified_index(all_kb_data)
 
 
 # ---------------------------------------------------------------------------
@@ -303,23 +564,29 @@ def detect_embedding_provider():
     return None, "No provider available. Options: pip install sentence-transformers, or set VOYAGE_API_KEY/OPENAI_API_KEY"
 
 
-def build_dense_embeddings(slugs, texts):
-    """Build dense embeddings using best available provider."""
+def build_dense_embeddings(slugs, texts, kb_config=None):
+    """Build dense embeddings using best available provider.
+
+    If kb_config is None, saves to unified dir.
+    """
     provider, detail = detect_embedding_provider()
     if provider is None:
         print(f"Dense embeddings: skipped ({detail})")
         return
 
-    print(f"Dense embeddings: using {detail}")
+    embeddings_file = kb_config.embeddings_file if kb_config else (UNIFIED_DIR / "dense_embeddings.npz")
+    label = kb_config.name if kb_config else "unified"
+
+    print(f"[{label}] Dense embeddings: using {detail}")
     try:
         if provider == "local":
             from sentence_transformers import SentenceTransformer
             model = SentenceTransformer("all-MiniLM-L6-v2")
             embeddings = model.encode(texts, show_progress_bar=True, batch_size=32)
-            np.savez_compressed(EMBEDDINGS_FILE,
+            np.savez_compressed(embeddings_file,
                                 embeddings=np.array(embeddings),
                                 slugs=np.array(slugs))
-            print(f"Dense embeddings built: {len(embeddings)} vectors, {embeddings.shape[1]} dims (local)")
+            print(f"[{label}] Dense embeddings built: {len(embeddings)} vectors, {embeddings.shape[1]} dims (local)")
 
         elif provider in ("openai", "voyage"):
             import os, urllib.request
@@ -344,21 +611,25 @@ def build_dense_embeddings(slugs, texts):
                         embeddings.append(item["embedding"])
                 print(f"  Embedded {min(i+20, len(texts))}/{len(texts)}")
 
-            np.savez_compressed(EMBEDDINGS_FILE,
+            np.savez_compressed(embeddings_file,
                                 embeddings=np.array(embeddings),
                                 slugs=np.array(slugs))
-            print(f"Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims ({provider})")
+            print(f"[{label}] Dense embeddings built: {len(embeddings)} vectors, {len(embeddings[0])} dims ({provider})")
 
     except Exception as e:
-        print(f"Dense embedding failed: {e}")
+        print(f"[{label}] Dense embedding failed: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Clusters
 # ---------------------------------------------------------------------------
 
-def build_clusters(slugs, metadata):
-    """Build topic clusters from tag co-occurrence."""
+def build_clusters(slugs, metadata, kb_config=None, output_file=None):
+    """Build topic clusters from tag co-occurrence.
+
+    If kb_config is provided, saves to that KB's clusters file.
+    If output_file is provided, saves there (used for unified).
+    """
     min_notes = cfg("clusters", "min_tag_notes")
     merge_thresh = cfg("clusters", "merge_overlap")
 
@@ -391,18 +662,28 @@ def build_clusters(slugs, metadata):
             "sample_notes": sorted(cdata["slugs"])[:5],
         }
 
-    CLUSTERS_FILE.write_text(json.dumps(result, indent=2))
-    print(f"Clusters built: {len(result)} topic clusters")
+    if output_file:
+        out = output_file
+    elif kb_config:
+        out = kb_config.clusters_file
+    else:
+        out = UNIFIED_DIR / "clusters.json"
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2))
+
+    label = kb_config.name if kb_config else "unified"
+    print(f"[{label}] Clusters built: {len(result)} topic clusters")
 
 
 # ---------------------------------------------------------------------------
 # Link graph
 # ---------------------------------------------------------------------------
 
-def build_graph(slugs, metadata):
+def build_graph(slugs, metadata, kb_config=None, output_file=None):
     """Build a directed adjacency list from wikilinks and save as graph.json."""
     slug_set = set(slugs)
-    adjacency = {}  # slug → {outgoing: [...], incoming: [...]}
+    adjacency = {}
 
     for slug in slugs:
         adjacency[slug] = {"outgoing": [], "incoming": []}
@@ -416,7 +697,6 @@ def build_graph(slugs, metadata):
                 adjacency[target]["incoming"].append(slug)
                 seen.add(target)
 
-    # Compute summary stats
     orphans = [s for s in slugs if not adjacency[s]["outgoing"] and not adjacency[s]["incoming"]]
     total_edges = sum(len(adjacency[s]["outgoing"]) for s in slugs)
 
@@ -428,29 +708,49 @@ def build_graph(slugs, metadata):
         "adjacency": adjacency,
     }
 
-    GRAPH_FILE.write_text(json.dumps(graph_data, indent=2))
-    print(f"Graph built: {len(slugs)} nodes, {total_edges} edges, {len(orphans)} orphans")
+    if output_file:
+        out = output_file
+    elif kb_config:
+        out = kb_config.graph_file
+    else:
+        out = UNIFIED_DIR / "graph.json"
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(graph_data, indent=2))
+
+    label = kb_config.name if kb_config else "unified"
+    print(f"[{label}] Graph built: {len(slugs)} nodes, {total_edges} edges, {len(orphans)} orphans")
 
 
-def load_graph():
-    """Load graph.json."""
-    if not GRAPH_FILE.exists():
-        print("Graph not found. Run: python3 .kb/kb-index.py build", file=sys.stderr)
+def _resolve_graph_file(kb_name=None):
+    """Get the graph file path for a KB or unified."""
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        return kb.graph_file
+    return UNIFIED_DIR / "graph.json"
+
+
+def load_graph(kb_name=None):
+    """Load graph.json for a specific KB or unified."""
+    graph_file = _resolve_graph_file(kb_name)
+    if not graph_file.exists():
+        label = kb_name or "unified"
+        print(f"[{label}] Graph not found. Run: python3 .kb/kb-index.py build", file=sys.stderr)
         sys.exit(1)
-    return json.loads(GRAPH_FILE.read_text())
+    return json.loads(graph_file.read_text())
 
 
-def graph_orphans():
+def graph_orphans(kb_name=None):
     """Notes with no incoming or outgoing links."""
-    g = load_graph()
+    g = load_graph(kb_name)
     adj = g["adjacency"]
     orphans = [s for s in adj if not adj[s]["outgoing"] and not adj[s]["incoming"]]
     return sorted(orphans)
 
 
-def graph_components():
+def graph_components(kb_name=None):
     """Find connected components (treating graph as undirected)."""
-    g = load_graph()
+    g = load_graph(kb_name)
     adj = g["adjacency"]
     all_nodes = set(adj.keys())
     visited = set()
@@ -478,9 +778,9 @@ def graph_components():
     return sorted(components, key=lambda c: -len(c))
 
 
-def graph_neighbors(slug, hops=2):
+def graph_neighbors(slug, hops=2, kb_name=None):
     """Find all notes within n hops of a given note."""
-    g = load_graph()
+    g = load_graph(kb_name)
     adj = g["adjacency"]
     if slug not in adj:
         return {}
@@ -496,26 +796,24 @@ def graph_neighbors(slug, hops=2):
                     next_frontier.append(neighbor)
         frontier = next_frontier
 
-    del visited[slug]  # exclude the starting node
+    del visited[slug]
     return visited
 
 
-def graph_bridges():
+def graph_bridges(kb_name=None):
     """Find bridge notes whose removal would increase the number of connected components."""
-    g = load_graph()
+    g = load_graph(kb_name)
     adj = g["adjacency"]
     all_nodes = set(adj.keys())
 
-    base_components = len(graph_components())
+    base_components = len(graph_components(kb_name))
     bridges = []
 
     for node in sorted(all_nodes):
-        # Skip orphans and low-connectivity nodes
         degree = len(adj[node]["outgoing"]) + len(adj[node]["incoming"])
         if degree < 2:
             continue
 
-        # Simulate removal
         visited = set()
         remaining = all_nodes - {node}
         comp_count = 0
@@ -549,18 +847,21 @@ def graph_bridges():
 REQUIRED_FIELDS = {"title", "tags", "created", "type"}
 VALID_TYPES = {"question", "concept", "reference", "insight", "synthesis"}
 
-def lint_note(filepath, taxonomy_tags=None, all_slugs=None):
-    """Validate a single note. Returns list of (severity, message) tuples."""
+
+def lint_note(filepath, taxonomy_tags=None, all_slugs=None, kb_name=None):
+    """Validate a single note. Returns list of (severity, message) tuples.
+
+    all_slugs can be a set of bare slugs (single KB) or a dict mapping
+    kb_name -> set of slugs (multi-KB mode for cross-KB link validation).
+    """
     issues = []
     slug = filepath.stem
 
-    # Read raw content
     try:
         content = filepath.read_text()
     except Exception as e:
         return [("error", f"Cannot read file: {e}")]
 
-    # Check frontmatter exists
     if not content.startswith("---"):
         issues.append(("error", "Missing YAML frontmatter (file must start with ---)"))
         return issues
@@ -570,7 +871,6 @@ def lint_note(filepath, taxonomy_tags=None, all_slugs=None):
         issues.append(("error", "Malformed frontmatter (needs opening and closing ---)"))
         return issues
 
-    # Parse YAML
     try:
         fm = yaml.safe_load(parts[1]) or {}
     except yaml.YAMLError as e:
@@ -610,15 +910,42 @@ def lint_note(filepath, taxonomy_tags=None, all_slugs=None):
             except ValueError:
                 issues.append(("warning", f"'{date_field}' has invalid date format: {val}"))
 
-    # Wikilink targets
+    # Wikilink targets — support cross-KB validation
     if all_slugs is not None:
         links = extract_wikilinks(body)
         fm_related = fm.get("related", [])
         for r in fm_related:
             links.extend(extract_wikilinks(str(r)))
-        for target in set(links):
-            if target not in all_slugs:
-                issues.append(("warning", f"Broken wikilink: [[{target}]] (note does not exist)"))
+
+        # Build the valid slug set depending on what was passed
+        if isinstance(all_slugs, dict):
+            # Multi-KB mode: dict of kb_name -> set of slugs
+            for link_kb, target in set(links):
+                if link_kb:
+                    # Explicit cross-KB link [[kb:slug]]
+                    if link_kb in all_slugs:
+                        if target not in all_slugs[link_kb]:
+                            issues.append(("warning", f"Broken wikilink: [[{link_kb}:{target}]] (note does not exist in {link_kb})"))
+                    else:
+                        issues.append(("warning", f"Broken wikilink: [[{link_kb}:{target}]] (unknown KB '{link_kb}')"))
+                else:
+                    # Plain link — check current KB first, then all KBs
+                    found = False
+                    if kb_name and kb_name in all_slugs:
+                        if target in all_slugs[kb_name]:
+                            found = True
+                    if not found:
+                        for kb_slugs in all_slugs.values():
+                            if target in kb_slugs:
+                                found = True
+                                break
+                    if not found:
+                        issues.append(("warning", f"Broken wikilink: [[{target}]] (note does not exist)"))
+        else:
+            # Simple set of slugs (single KB or backward compat)
+            for _, target in set(links):
+                if target not in all_slugs:
+                    issues.append(("warning", f"Broken wikilink: [[{target}]] (note does not exist)"))
 
     # Citation paths
     ref_citations = re.findall(r'\[([^\]]+)\]\((\.\.\/references\/[^)]+|references\/[^)]+)\)', body)
@@ -638,10 +965,16 @@ def lint_note(filepath, taxonomy_tags=None, all_slugs=None):
     if note_type == "synthesis":
         depends = fm.get("depends_on", [])
         if not depends:
-            issues.append(("info", "Synthesis note has no 'depends_on' field — cannot track staleness"))
+            issues.append(("info", "Synthesis note has no 'depends_on' field -- cannot track staleness"))
         elif all_slugs is not None:
+            valid_set = set()
+            if isinstance(all_slugs, dict):
+                for s in all_slugs.values():
+                    valid_set |= s
+            else:
+                valid_set = all_slugs
             for dep in depends:
-                if dep not in all_slugs:
+                if dep not in valid_set:
                     issues.append(("warning", f"Dependency not found: {dep}"))
 
     # Filename convention
@@ -659,8 +992,13 @@ def lint_note(filepath, taxonomy_tags=None, all_slugs=None):
     return issues
 
 
-def lint_all(target_slug=None):
-    """Lint all notes (or a single one). Returns dict of slug → issues."""
+def lint_all(target_slug=None, kb_name=None):
+    """Lint notes. Returns dict of slug -> issues.
+
+    If kb_name is specified, lint that KB only.
+    If kb_name is None, lint all KBs.
+    If target_slug is given, lint only that note (within the given or all KBs).
+    """
     # Load taxonomy tags
     taxonomy_tags = set()
     if TAXONOMY_FILE.exists():
@@ -670,19 +1008,38 @@ def lint_all(target_slug=None):
         except yaml.YAMLError:
             pass
 
-    all_slugs = {p.stem for p in NOTES.glob("*.md")}
+    reg = get_registry()
+
+    if kb_name:
+        kbs_to_lint = [resolve_kb(kb_name)]
+    else:
+        kbs_to_lint = reg.all_kbs()
+
+    # Build cross-KB slug map for wikilink validation
+    all_slugs_map = {}
+    for kb in reg.all_kbs():
+        if kb.notes_dir.exists():
+            all_slugs_map[kb.name] = {p.stem for p in kb.notes_dir.glob("*.md")}
+        else:
+            all_slugs_map[kb.name] = set()
 
     if target_slug:
-        filepath = NOTES / f"{target_slug}.md"
-        if not filepath.exists():
-            return {target_slug: [("error", f"Note file not found: {filepath}")]}
-        return {target_slug: lint_note(filepath, taxonomy_tags, all_slugs)}
+        # Find the note in the target KB(s)
+        for kb in kbs_to_lint:
+            filepath = kb.notes_dir / f"{target_slug}.md"
+            if filepath.exists():
+                return {target_slug: lint_note(filepath, taxonomy_tags, all_slugs_map, kb_name=kb.name)}
+        return {target_slug: [("error", f"Note file not found: {target_slug}")]}
 
     results = {}
-    for path in sorted(NOTES.glob("*.md")):
-        issues = lint_note(path, taxonomy_tags, all_slugs)
-        if issues:
-            results[path.stem] = issues
+    for kb in kbs_to_lint:
+        if not kb.notes_dir.exists():
+            continue
+        for path in sorted(kb.notes_dir.glob("*.md")):
+            issues = lint_note(path, taxonomy_tags, all_slugs_map, kb_name=kb.name)
+            if issues:
+                key = f"{kb.name}:{path.stem}" if not kb_name else path.stem
+                results[key] = issues
 
     return results
 
@@ -691,51 +1048,55 @@ def lint_all(target_slug=None):
 # Auto-backlinks
 # ---------------------------------------------------------------------------
 
-FEEDBACK_FILE = INDEX_DIR / "feedback.jsonl"
-
-def auto_backlink(target_slugs=None):
+def auto_backlink(target_slugs=None, kb_name=None):
     """Scan notes for outgoing [[wikilinks]] and add missing reverse links.
 
+    If kb_name is specified, operate on that KB only.
+    If kb_name is None, operate on all KBs.
     If target_slugs is provided, only process those notes.
-    Otherwise, scan all notes.
     Returns list of (source, target, action) tuples.
     """
-    all_notes = {p.stem: p for p in sorted(NOTES.glob("*.md"))}
+    reg = get_registry()
+    if kb_name:
+        kbs_to_scan = [resolve_kb(kb_name)]
+    else:
+        kbs_to_scan = reg.all_kbs()
+
     changes = []
 
-    # Build outgoing link map
-    if target_slugs:
-        notes_to_scan = {s: all_notes[s] for s in target_slugs if s in all_notes}
-    else:
-        notes_to_scan = all_notes
+    for kb in kbs_to_scan:
+        if not kb.notes_dir.exists():
+            continue
 
-    for slug, path in notes_to_scan.items():
-        fm, body, _ = parse_note(path)
-        outgoing = set(extract_wikilinks(body))
-        # Also extract from related frontmatter
-        for r in fm.get("related", []):
-            outgoing.update(extract_wikilinks(str(r)))
+        all_notes = {p.stem: p for p in sorted(kb.notes_dir.glob("*.md"))}
 
-        for target in outgoing:
-            if target == slug or target not in all_notes:
-                continue
+        if target_slugs:
+            notes_to_scan = {s: all_notes[s] for s in target_slugs if s in all_notes}
+        else:
+            notes_to_scan = all_notes
 
-            # Check if target note has a backlink to this slug
-            target_path = all_notes[target]
-            target_fm, target_body, _ = parse_note(target_path)
-            target_related = target_fm.get("related", [])
-            target_links = set()
-            for r in target_related:
-                target_links.update(extract_wikilinks(str(r)))
+        for slug, path in notes_to_scan.items():
+            fm, body, _ = parse_note(path)
+            outgoing = set(extract_wikilink_slugs(body))
+            for r in fm.get("related", []):
+                outgoing.update(extract_wikilink_slugs(str(r)))
 
-            if slug not in target_links:
-                # Add backlink to target's related field
-                target_related.append(f"[[{slug}]]")
-                target_fm["related"] = target_related
+            for target in outgoing:
+                if target == slug or target not in all_notes:
+                    continue
 
-                # Rewrite the note with updated frontmatter
-                _rewrite_frontmatter(target_path, target_fm)
-                changes.append((slug, target, "added backlink"))
+                target_path = all_notes[target]
+                target_fm, target_body, _ = parse_note(target_path)
+                target_related = target_fm.get("related", [])
+                target_links = set()
+                for r in target_related:
+                    target_links.update(extract_wikilink_slugs(str(r)))
+
+                if slug not in target_links:
+                    target_related.append(f"[[{slug}]]")
+                    target_fm["related"] = target_related
+                    _rewrite_frontmatter(target_path, target_fm)
+                    changes.append((slug, target, "added backlink"))
 
     return changes
 
@@ -749,7 +1110,6 @@ def _rewrite_frontmatter(filepath, new_fm):
     if len(parts) < 3:
         return
     body = parts[2]
-    # Use yaml.dump with default_flow_style for lists to keep compact format
     fm_text = yaml.dump(new_fm, default_flow_style=False, allow_unicode=True, sort_keys=False).strip()
     filepath.write_text(f"---\n{fm_text}\n---\n{body}")
 
@@ -760,13 +1120,13 @@ def _rewrite_frontmatter(filepath, new_fm):
 
 def log_feedback(query, retrieved, expected, failure_type, notes_text=""):
     """Append a feedback entry to .kb/index/feedback.jsonl."""
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "timestamp": datetime.now().isoformat(),
         "query": query,
         "retrieved": retrieved,
         "expected": expected,
-        "failure_type": failure_type,  # missed | wrong | stale | irrelevant
+        "failure_type": failure_type,
         "notes": notes_text,
     }
     with open(FEEDBACK_FILE, "a") as f:
@@ -807,17 +1167,25 @@ def get_feedback_summary():
 # Quick search (title/slug/tag match only)
 # ---------------------------------------------------------------------------
 
-def quick_search(query, top_k=10):
-    """Fast title/slug/tag match — no TF-IDF, no embeddings.
+def quick_search(query, top_k=10, kb_name=None):
+    """Fast title/slug/tag match -- no TF-IDF, no embeddings.
 
-    Returns notes where query words appear in title, slug, or tags.
-    Ranked by match density (fraction of query words found).
+    If kb_name is None, searches unified metadata.
+    If kb_name is specified, searches that KB's metadata.
     """
-    if not META_FILE.exists():
-        print("No index. Run: python3 .kb/kb-index.py build", file=sys.stderr)
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        meta_file = kb.meta_file
+        label = kb.name
+    else:
+        meta_file = UNIFIED_DIR / "metadata.json"
+        label = "unified"
+
+    if not meta_file.exists():
+        print(f"[{label}] No index. Run: python3 .kb/kb-index.py build", file=sys.stderr)
         sys.exit(1)
 
-    metadata = json.loads(META_FILE.read_text())
+    metadata = json.loads(meta_file.read_text())
     query_lower = query.lower()
     stop_words = {"the", "a", "an", "is", "are", "how", "do", "does", "what", "which",
                   "and", "or", "for", "in", "of", "to", "with", "can", "be", "it",
@@ -829,8 +1197,14 @@ def quick_search(query, top_k=10):
 
     results = []
     for slug, meta in metadata.items():
+        # For unified index, slug is "kb:bare-slug"; extract bare slug for matching
+        if ":" in slug:
+            kb_part, bare_slug = slug.split(":", 1)
+        else:
+            kb_part, bare_slug = meta.get("kb", ""), slug
+
         title_words = set(re.sub(r'[^\w\s]', '', meta.get("title", "").lower()).split())
-        slug_words = set(slug.split("-"))
+        slug_words = set(bare_slug.split("-"))
         tag_words = set()
         for t in meta.get("tags", []):
             tag_words.update(t.lower().split("-"))
@@ -841,19 +1215,19 @@ def quick_search(query, top_k=10):
         if not overlap:
             continue
 
-        # Score: fraction of query words matched, with title matches weighted higher
         title_match = len(query_words & title_words) / len(query_words)
         slug_match = len(query_words & slug_words) / len(query_words)
         tag_match = len(query_words & tag_words) / len(query_words)
         score = title_match * 2.0 + slug_match * 1.5 + tag_match * 1.0
 
         results.append({
-            "slug": slug,
-            "title": meta.get("title", slug),
+            "slug": bare_slug,
+            "title": meta.get("title", bare_slug),
             "score": round(score, 4),
             "type": meta.get("type", ""),
             "tags": meta.get("tags", []),
             "match": sorted(overlap),
+            "kb": meta.get("kb", kb_part),
         })
 
     results.sort(key=lambda x: -x["score"])
@@ -864,26 +1238,35 @@ def quick_search(query, top_k=10):
 # Discovery: topic map, explore, gaps
 # ---------------------------------------------------------------------------
 
-def topic_map():
-    """Generate a topic map from clusters + link graph."""
-    if not META_FILE.exists() or not CLUSTERS_FILE.exists():
+def topic_map(kb_name=None):
+    """Generate a topic map from clusters + link graph.
+
+    If kb_name is None, uses unified index.
+    """
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        meta_file = kb.meta_file
+        clusters_file = kb.clusters_file
+        graph_file = kb.graph_file
+    else:
+        meta_file = UNIFIED_DIR / "metadata.json"
+        clusters_file = UNIFIED_DIR / "clusters.json"
+        graph_file = UNIFIED_DIR / "graph.json"
+
+    if not meta_file.exists() or not clusters_file.exists():
         print("No index. Run: python3 .kb/kb-index.py build")
         return {}
 
-    metadata = json.loads(META_FILE.read_text())
-    clusters = json.loads(CLUSTERS_FILE.read_text())
+    metadata = json.loads(meta_file.read_text())
+    clusters = json.loads(clusters_file.read_text())
 
-    # Enrich clusters with type distribution and link density
     result = {}
     for tag, cdata in sorted(clusters.items(), key=lambda x: -x[1]["count"]):
-        sample_slugs = cdata.get("sample_notes", [])
-        # Get all slugs in this cluster
         all_cluster_slugs = set()
         for slug, meta in metadata.items():
             if tag in meta.get("tags", []):
                 all_cluster_slugs.add(slug)
 
-        # Type distribution within cluster
         types = defaultdict(int)
         total_words = 0
         for slug in all_cluster_slugs:
@@ -891,14 +1274,12 @@ def topic_map():
             types[meta.get("type", "unknown")] += 1
             total_words += meta.get("word_count", 0)
 
-        # Link density
         total_links = 0
-        if GRAPH_FILE.exists():
-            graph = json.loads(GRAPH_FILE.read_text())
+        if graph_file.exists():
+            graph = json.loads(graph_file.read_text())
             adj = graph.get("adjacency", {})
             for slug in all_cluster_slugs:
                 if slug in adj:
-                    # Count links within the cluster
                     for target in adj[slug].get("outgoing", []):
                         if target in all_cluster_slugs:
                             total_links += 1
@@ -919,13 +1300,21 @@ def topic_map():
     return result
 
 
-def explore_path(start_slug, max_steps=5):
+def explore_path(start_slug, max_steps=5, kb_name=None):
     """Suggest a reading path from a starting note, following the most relevant links."""
-    if not GRAPH_FILE.exists() or not META_FILE.exists():
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        graph_file = kb.graph_file
+        meta_file = kb.meta_file
+    else:
+        graph_file = UNIFIED_DIR / "graph.json"
+        meta_file = UNIFIED_DIR / "metadata.json"
+
+    if not graph_file.exists() or not meta_file.exists():
         return []
 
-    graph = json.loads(GRAPH_FILE.read_text())
-    metadata = json.loads(META_FILE.read_text())
+    graph = json.loads(graph_file.read_text())
+    metadata = json.loads(meta_file.read_text())
     adj = graph.get("adjacency", {})
 
     if start_slug not in adj:
@@ -940,7 +1329,6 @@ def explore_path(start_slug, max_steps=5):
         for neighbor in adj.get(current, {}).get("outgoing", []) + adj.get(current, {}).get("incoming", []):
             if neighbor not in visited and neighbor in metadata:
                 meta = metadata[neighbor]
-                # Score by: word count (prefer substantial notes), type (prefer insight/question)
                 type_bonus = {"insight": 0.3, "question": 0.2, "concept": 0.1, "reference": 0.0, "synthesis": -0.1}
                 score = meta.get("word_count", 0) / 1000.0 + type_bonus.get(meta.get("type", ""), 0)
                 candidates.append((neighbor, score))
@@ -948,7 +1336,6 @@ def explore_path(start_slug, max_steps=5):
         if not candidates:
             break
 
-        # Pick the highest-scoring unvisited neighbor
         candidates.sort(key=lambda x: -x[1])
         next_slug = candidates[0][0]
         path.append(next_slug)
@@ -957,9 +1344,9 @@ def explore_path(start_slug, max_steps=5):
     return path
 
 
-def find_topic_gaps():
+def find_topic_gaps(kb_name=None):
     """Identify thin areas in the KB based on cluster analysis."""
-    tmap = topic_map()
+    tmap = topic_map(kb_name)
     if not tmap:
         return []
 
@@ -972,7 +1359,6 @@ def find_topic_gaps():
             issues.append(f"avg {data['avg_words']} words (thin)")
         if data["link_density"] < 0.05:
             issues.append(f"link density {data['link_density']:.1%} (poorly connected)")
-        # Type imbalance: all concepts, no insights or questions
         types = data.get("types", {})
         if types.get("concept", 0) > 5 and types.get("insight", 0) == 0 and types.get("question", 0) == 0:
             issues.append("no insights or questions (all concepts)")
@@ -992,13 +1378,19 @@ def find_topic_gaps():
 # Synthesis staleness
 # ---------------------------------------------------------------------------
 
-def find_stale_syntheses():
+def find_stale_syntheses(kb_name=None):
     """Find synthesis notes whose dependencies have been updated more recently."""
-    if not META_FILE.exists():
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        meta_file = kb.meta_file
+    else:
+        meta_file = UNIFIED_DIR / "metadata.json"
+
+    if not meta_file.exists():
         print("No index. Run: python3 .kb/kb-index.py build")
         return []
 
-    metadata = json.loads(META_FILE.read_text())
+    metadata = json.loads(meta_file.read_text())
     stale = []
 
     for slug, meta in metadata.items():
@@ -1012,7 +1404,12 @@ def find_stale_syntheses():
         synth_updated = meta.get("updated", "")
         stale_deps = []
         for dep in depends:
+            # Try both bare and qualified lookups
             dep_meta = metadata.get(dep)
+            if not dep_meta:
+                # Try qualifying with same KB
+                slug_kb = meta.get("kb", "")
+                dep_meta = metadata.get(f"{slug_kb}:{dep}")
             if not dep_meta:
                 stale_deps.append(f"{dep} (not found)")
                 continue
@@ -1026,6 +1423,7 @@ def find_stale_syntheses():
                 "title": meta.get("title", slug),
                 "last_updated": synth_updated,
                 "stale_dependencies": stale_deps,
+                "kb": meta.get("kb", ""),
             })
 
     return stale
@@ -1035,48 +1433,59 @@ def find_stale_syntheses():
 # Search
 # ---------------------------------------------------------------------------
 
-def load_index():
-    """Load existing index."""
-    if not INDEX_FILE.exists() or not VECTORS_FILE.exists():
-        print("Index not found. Run: python3 .kb/kb-index.py build", file=sys.stderr)
+def load_index(kb_name=None):
+    """Load existing index.
+
+    If kb_name is None, loads unified index.
+    If kb_name is specified, loads that KB's index.
+    """
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        index_file = kb.index_file
+        vectors_file = kb.vectors_file
+        vectorizer_file = kb.vectorizer_file
+        meta_file = kb.meta_file
+        label = kb.name
+    else:
+        index_file = UNIFIED_DIR / "tfidf_index.json"
+        vectors_file = UNIFIED_DIR / "tfidf_vectors.npz"
+        vectorizer_file = UNIFIED_DIR / "vectorizer.pkl"
+        meta_file = UNIFIED_DIR / "metadata.json"
+        label = "unified"
+
+    if not index_file.exists() or not vectors_file.exists():
+        print(f"[{label}] Index not found. Run: python3 .kb/kb-index.py build", file=sys.stderr)
         sys.exit(1)
 
     import pickle
-    with open(VECTORIZER_FILE, "rb") as f:
+    with open(vectorizer_file, "rb") as f:
         vectorizer = pickle.load(f)
 
-    npz = np.load(VECTORS_FILE)
-    data = json.loads(INDEX_FILE.read_text())
-    metadata = json.loads(META_FILE.read_text())
+    npz = np.load(vectors_file)
+    data = json.loads(index_file.read_text())
+    metadata = json.loads(meta_file.read_text())
 
     return npz["vectors"], vectorizer, list(npz["slugs"]), metadata
 
 
-def multi_search(queries, tags=None, note_type=None, valid_only=True, top_k=10):
-    """Run search for multiple query variants and merge results via RRF.
-
-    Each query is searched independently, then results are fused using
-    Reciprocal Rank Fusion. This handles vocabulary mismatch by trying
-    different phrasings of the same intent.
-    """
+def multi_search(queries, tags=None, note_type=None, valid_only=True, top_k=10, kb_name=None):
+    """Run search for multiple query variants and merge results via RRF."""
     scfg = load_config()["search"]
     k_rrf = scfg["rrf_constant"]
 
-    # Collect per-query ranked lists
     all_results = []
     for q in queries:
-        results = search(q, tags=tags, note_type=note_type, valid_only=valid_only, top_k=top_k * 2)
+        results = search(q, tags=tags, note_type=note_type, valid_only=valid_only,
+                         top_k=top_k * 2, kb_name=kb_name)
         all_results.append(results)
 
-    # RRF fusion across all query variants
     slug_scores = defaultdict(float)
     slug_meta = {}
     for results in all_results:
         for rank, r in enumerate(results):
             slug_scores[r["slug"]] += 1.0 / (k_rrf + rank)
-            slug_meta[r["slug"]] = r  # keep latest metadata
+            slug_meta[r["slug"]] = r
 
-    # Sort by fused score
     ranked = sorted(slug_scores.items(), key=lambda x: -x[1])[:top_k]
 
     fused = []
@@ -1088,16 +1497,31 @@ def multi_search(queries, tags=None, note_type=None, valid_only=True, top_k=10):
     return fused
 
 
-def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
-    """Hybrid search: TF-IDF + dense embeddings with metadata filtering and topic weighting."""
-    vectors, vectorizer, slugs, metadata = load_index()
+def search(query, tags=None, note_type=None, valid_only=True, top_k=10, kb_name=None):
+    """Hybrid search: TF-IDF + dense embeddings with metadata filtering and topic weighting.
+
+    If kb_name is None, searches unified index.
+    If kb_name is specified, searches that KB only.
+    """
+    vectors, vectorizer, slugs, metadata = load_index(kb_name)
     scfg = load_config()["search"]
+
+    # Determine file paths for auxiliary data
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        embeddings_file = kb.embeddings_file
+        clusters_file = kb.clusters_file
+        graph_file = kb.graph_file
+    else:
+        embeddings_file = UNIFIED_DIR / "dense_embeddings.npz"
+        clusters_file = UNIFIED_DIR / "clusters.json"
+        graph_file = UNIFIED_DIR / "graph.json"
 
     # TF-IDF similarity
     query_vec = vectorizer.transform([query]).toarray()
     tfidf_sims = cosine_similarity(query_vec, vectors)[0]
 
-    # Title, slug, and tag boosting: direct lexical match signals
+    # Title, slug, and tag boosting
     title_boost = scfg.get("title_boost", 2.0)
     tag_boost = scfg.get("tag_boost", 1.5)
     query_lower = query.lower()
@@ -1106,7 +1530,6 @@ def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
                   "this", "that", "these", "those", "my", "your", "their", "between"}
     query_words = set(re.sub(r'[^\w\s]', '', query_lower).split()) - stop_words
 
-    # Also build bigrams from query for compound term matching (e.g. "pig butchering")
     query_word_list = [w for w in re.sub(r'[^\w\s]', '', query_lower).split() if w not in stop_words]
     query_bigrams = set()
     for j in range(len(query_word_list) - 1):
@@ -1119,41 +1542,38 @@ def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
             title_lower = meta.get("title", "").lower()
             title_words = set(re.sub(r'[^\w\s]', '', title_lower).split())
 
-            # Slug words (split on hyphens)
-            slug_words = set(slug.split("-"))
+            # For unified slugs like "general:tcp-congestion", extract bare slug
+            bare_slug = slug.split(":", 1)[-1] if ":" in slug else slug
+            slug_words = set(bare_slug.split("-"))
 
-            # Tag words (split hyphenated tags into individual words)
             tag_words = set()
-            tag_compounds = set()  # full hyphenated tags for bigram matching
+            tag_compounds = set()
             for t in meta.get("tags", []):
                 tag_words.update(t.lower().split("-"))
                 tag_compounds.add(t.lower())
 
-            # Title match: fraction of query words found in title
             title_overlap = len(query_words & title_words) / len(query_words)
             if title_overlap > 0:
                 tfidf_sims[i] *= (1.0 + (title_boost - 1.0) * title_overlap)
 
-            # Slug match: fraction of query words found in slug
             slug_overlap = len(query_words & slug_words) / len(query_words)
             if slug_overlap > 0:
                 tfidf_sims[i] *= (1.0 + (title_boost - 1.0) * slug_overlap)
 
-            # Tag match: query words or bigrams match tags
-            tag_overlap = len(query_words & tag_words) / len(query_words)
-            # Bigram match: "pig butchering" → matches tag "pig-butchering"
             bigram_match = bool(query_bigrams & tag_compounds)
             if bigram_match:
-                tfidf_sims[i] *= tag_boost  # full boost for compound match
-            elif tag_overlap > 0:
-                tfidf_sims[i] *= (1.0 + (tag_boost - 1.0) * tag_overlap)
+                tfidf_sims[i] *= tag_boost
+            else:
+                tag_overlap = len(query_words & tag_words) / len(query_words)
+                if tag_overlap > 0:
+                    tfidf_sims[i] *= (1.0 + (tag_boost - 1.0) * tag_overlap)
 
     # Dense embedding similarity
     dense_sims = np.zeros_like(tfidf_sims)
     has_dense = False
-    if EMBEDDINGS_FILE.exists():
+    if embeddings_file.exists():
         try:
-            dense_npz = np.load(EMBEDDINGS_FILE)
+            dense_npz = np.load(embeddings_file)
             dense_vecs = dense_npz["embeddings"]
             provider, _ = detect_embedding_provider()
             q_emb = None
@@ -1200,9 +1620,9 @@ def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
         sims = tfidf_sims
 
     # Topic weighting
-    if CLUSTERS_FILE.exists():
+    if clusters_file.exists():
         try:
-            clusters = json.loads(CLUSTERS_FILE.read_text())
+            clusters = json.loads(clusters_file.read_text())
             cluster_sizes = {t: c["count"] for t, c in clusters.items()}
             max_cluster = max(cluster_sizes.values()) if cluster_sizes else 1
             boost_scale = scfg["cluster_boost_scale"]
@@ -1218,23 +1638,21 @@ def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
         except Exception:
             pass
 
-    # Graph expansion: boost neighbors of top-scoring notes via wikilinks
+    # Graph expansion
     gcfg = load_config().get("graph", {})
     expansion_hops = gcfg.get("expansion_hops", 1)
     expansion_seeds = gcfg.get("expansion_seeds", 5)
     expansion_decay = gcfg.get("expansion_decay", 0.5)
 
-    if expansion_hops > 0 and GRAPH_FILE.exists():
+    if expansion_hops > 0 and graph_file.exists():
         try:
-            graph_data = json.loads(GRAPH_FILE.read_text())
+            graph_data = json.loads(graph_file.read_text())
             adj = graph_data.get("adjacency", {})
             slug_to_idx = {s: i for i, s in enumerate(slugs)}
 
-            # Get top seeds by current score
             seed_indices = np.argsort(sims)[::-1][:expansion_seeds]
             seeds = [(slugs[i], float(sims[i])) for i in seed_indices if sims[i] > scfg["min_score"]]
 
-            # Expand: for each seed, boost its 1-hop neighbors by adding decayed seed score
             for seed_slug, seed_score in seeds:
                 if seed_slug not in adj:
                     continue
@@ -1279,69 +1697,110 @@ def search(query, tags=None, note_type=None, valid_only=True, top_k=10):
             break
         slug = slugs[idx]
         meta = metadata.get(slug, {})
+        # Extract bare slug for display; keep qualified slug in "qualified_slug"
+        if ":" in slug:
+            kb_part, bare_slug = slug.split(":", 1)
+        else:
+            kb_part = meta.get("kb", "")
+            bare_slug = slug
         results.append({
-            "slug": slug,
-            "title": meta.get("title", slug),
+            "slug": bare_slug,
+            "qualified_slug": slug,
+            "title": meta.get("title", bare_slug),
             "score": round(float(sims[idx]), 4),
             "type": meta.get("type", ""),
             "tags": meta.get("tags", []),
             "deprecated": bool(meta.get("deprecated_by")),
+            "kb": meta.get("kb", kb_part),
         })
 
     return results
 
 
-def find_similar(slug, top_k=10):
-    """Find notes most similar to a given note."""
-    vectors, vectorizer, slugs, metadata = load_index()
+def find_similar(slug, top_k=10, kb_name=None):
+    """Find notes most similar to a given note.
+
+    If kb_name is None, uses unified index. The slug can be bare or qualified.
+    """
+    vectors, vectorizer, slugs, metadata = load_index(kb_name)
     min_score = cfg("similarity", "min_score")
 
-    if slug not in slugs:
+    # Try to find the slug in the index (bare or qualified)
+    target_idx = None
+    if slug in slugs:
+        target_idx = slugs.index(slug)
+    else:
+        # Try qualifying with each KB
+        for s in slugs:
+            if s.endswith(f":{slug}"):
+                target_idx = slugs.index(s)
+                break
+
+    if target_idx is None:
         print(f"Note '{slug}' not found in index.", file=sys.stderr)
         return []
 
-    idx = slugs.index(slug)
-    sims = cosine_similarity(vectors[idx:idx+1], vectors)[0]
-    sims[idx] = 0
+    sims = cosine_similarity(vectors[target_idx:target_idx+1], vectors)[0]
+    sims[target_idx] = 0
 
     ranked = np.argsort(sims)[::-1][:top_k]
     results = []
     for i in ranked:
         if sims[i] < min_score:
             break
+        s = slugs[i]
+        meta = metadata.get(s, {})
+        if ":" in s:
+            kb_part, bare = s.split(":", 1)
+        else:
+            kb_part, bare = meta.get("kb", ""), s
         results.append({
-            "slug": slugs[i],
-            "title": metadata.get(slugs[i], {}).get("title", slugs[i]),
+            "slug": bare,
+            "title": meta.get("title", bare),
             "score": round(float(sims[i]), 4),
+            "kb": meta.get("kb", kb_part),
         })
     return results
 
 
-def check_contradictions(slug):
+def check_contradictions(slug, kb_name=None):
     """Find notes that might contradict a given note."""
-    similar = find_similar(slug, top_k=20)
-    _, _, slugs, metadata = load_index()
+    similar = find_similar(slug, top_k=20, kb_name=kb_name)
+    _, _, slugs, metadata = load_index(kb_name)
     overlap_thresh = cfg("similarity", "contradiction_overlap")
     high_thresh = cfg("similarity", "contradiction_high")
 
     candidates = []
     for s in similar:
         if s["score"] > overlap_thresh:
-            meta = metadata.get(s["slug"], {})
+            # Find full metadata
+            qualified = f"{s['kb']}:{s['slug']}" if s.get("kb") else s["slug"]
+            meta = metadata.get(qualified, metadata.get(s["slug"], {}))
             candidates.append({
                 **s,
                 "tags": meta.get("tags", []),
                 "type": meta.get("type", ""),
-                "warning": "HIGH OVERLAP — review for consistency" if s["score"] > high_thresh else "moderate overlap",
+                "warning": "HIGH OVERLAP -- review for consistency" if s["score"] > high_thresh else "moderate overlap",
             })
     return candidates
 
 
-def find_stale(days_threshold=None):
+def find_stale(days_threshold=None, kb_name=None):
     """Find notes that may be outdated."""
     if days_threshold is None:
         days_threshold = cfg("staleness", "default_days")
-    metadata = json.loads(META_FILE.read_text())
+
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        meta_file = kb.meta_file
+    else:
+        meta_file = UNIFIED_DIR / "metadata.json"
+
+    if not meta_file.exists():
+        print("No index. Run: python3 .kb/kb-index.py build")
+        return []
+
+    metadata = json.loads(meta_file.read_text())
     today = date.today()
     stale = []
 
@@ -1365,14 +1824,23 @@ def find_stale(days_threshold=None):
         if meta.get("deprecated_by"):
             reasons.append(f"deprecated by [[{meta['deprecated_by']}]]")
         if reasons:
-            stale.append({"slug": slug, "title": meta.get("title", slug), "reasons": reasons})
+            if ":" in slug:
+                kb_part, bare = slug.split(":", 1)
+            else:
+                kb_part, bare = meta.get("kb", ""), slug
+            stale.append({
+                "slug": bare,
+                "title": meta.get("title", bare),
+                "reasons": reasons,
+                "kb": meta.get("kb", kb_part),
+            })
 
     return sorted(stale, key=lambda x: len(x["reasons"]), reverse=True)
 
 
-def check_coverage(topic):
+def check_coverage(topic, kb_name=None):
     """Check if the KB has adequate coverage of a topic."""
-    vectors, vectorizer, slugs, metadata = load_index()
+    vectors, vectorizer, slugs, metadata = load_index(kb_name)
     ccfg = load_config()["coverage"]
 
     query_vec = vectorizer.transform([topic]).toarray()
@@ -1384,7 +1852,16 @@ def check_coverage(topic):
             break
         slug = slugs[idx]
         meta = metadata.get(slug, {})
-        results.append({"slug": slug, "title": meta.get("title", slug), "score": round(float(tfidf_sims[idx]), 4)})
+        if ":" in slug:
+            kb_part, bare = slug.split(":", 1)
+        else:
+            kb_part, bare = meta.get("kb", ""), slug
+        results.append({
+            "slug": bare,
+            "title": meta.get("title", bare),
+            "score": round(float(tfidf_sims[idx]), 4),
+            "kb": meta.get("kb", kb_part),
+        })
 
     if not results:
         return {"covered": False, "confidence": 0, "message": f"No notes found matching '{topic}'", "notes": []}
@@ -1412,60 +1889,88 @@ def check_coverage(topic):
     }
 
 
-def stats():
-    """Print index statistics."""
-    if not META_FILE.exists():
-        print("No index. Run: python3 .kb/kb-index.py build")
-        return
+def stats(kb_name=None):
+    """Print index statistics.
 
-    metadata = json.loads(META_FILE.read_text())
-    index_data = json.loads(INDEX_FILE.read_text())
+    If kb_name is None, show per-KB stats + total.
+    If kb_name is specified, show only that KB.
+    """
+    reg = get_registry()
 
-    types = {}
-    all_tags = {}
-    total_words = 0
-    deprecated = 0
-
-    for slug, meta in metadata.items():
-        t = meta.get("type", "unknown")
-        types[t] = types.get(t, 0) + 1
-        for tag in meta.get("tags", []):
-            all_tags[tag] = all_tags.get(tag, 0) + 1
-        total_words += meta.get("word_count", 0)
-        if meta.get("deprecated_by"):
-            deprecated += 1
-
-    print(f"Notes: {len(metadata)}")
-    print(f"Features: {index_data.get('feature_count', 'unknown')}")
-    print(f"Total words: {total_words:,}")
-    print(f"Deprecated: {deprecated}")
-
-    # Type distribution with balance indicator
-    total = len(metadata)
-    print(f"Types:")
-    for t in sorted(types.keys()):
-        count = types[t]
-        pct = count / total * 100 if total else 0
-        bar = "█" * int(pct / 2)
-        print(f"  {t:12s} {count:4d} ({pct:4.1f}%) {bar}")
-
-    provider, detail = detect_embedding_provider()
-    if EMBEDDINGS_FILE.exists():
-        dense_npz = np.load(EMBEDDINGS_FILE)
-        dims = dense_npz["embeddings"].shape[1]
-        print(f"Dense embeddings: yes ({dims} dims, {dense_npz['embeddings'].shape[0]} vectors)")
-    elif provider:
-        print(f"Dense embeddings: available but not built (run 'build --embed'). Provider: {detail}")
+    if kb_name:
+        kbs_to_show = [resolve_kb(kb_name)]
     else:
-        print(f"Dense embeddings: not available. {detail}")
+        kbs_to_show = reg.all_kbs()
 
-    print(f"Topic clusters: {len(json.loads(CLUSTERS_FILE.read_text())) if CLUSTERS_FILE.exists() else 0}")
+    grand_total_notes = 0
+    grand_total_words = 0
 
-    if GRAPH_FILE.exists():
-        g = json.loads(GRAPH_FILE.read_text())
-        print(f"Link graph: {g['node_count']} nodes, {g['edge_count']} edges, {g['orphan_count']} orphans")
+    for kb in kbs_to_show:
+        if not kb.meta_file.exists():
+            print(f"[{kb.name}] No index. Run: python3 .kb/kb-index.py build")
+            continue
 
-    print(f"Top tags: {json.dumps(dict(sorted(all_tags.items(), key=lambda x: -x[1])[:20]), indent=2)}")
+        metadata = json.loads(kb.meta_file.read_text())
+        index_data = json.loads(kb.index_file.read_text()) if kb.index_file.exists() else {}
+
+        types = {}
+        all_tags = {}
+        total_words = 0
+        deprecated = 0
+
+        for slug, meta in metadata.items():
+            t = meta.get("type", "unknown")
+            types[t] = types.get(t, 0) + 1
+            for tag in meta.get("tags", []):
+                all_tags[tag] = all_tags.get(tag, 0) + 1
+            total_words += meta.get("word_count", 0)
+            if meta.get("deprecated_by"):
+                deprecated += 1
+
+        grand_total_notes += len(metadata)
+        grand_total_words += total_words
+
+        print(f"=== {kb.name} {'(private)' if kb.private else ''} ===")
+        print(f"Notes: {len(metadata)}")
+        print(f"Features: {index_data.get('feature_count', 'unknown')}")
+        print(f"Total words: {total_words:,}")
+        print(f"Deprecated: {deprecated}")
+
+        total = len(metadata)
+        print(f"Types:")
+        for t in sorted(types.keys()):
+            count = types[t]
+            pct = count / total * 100 if total else 0
+            bar = "=" * int(pct / 2)
+            print(f"  {t:12s} {count:4d} ({pct:4.1f}%) {bar}")
+
+        provider, detail = detect_embedding_provider()
+        if kb.embeddings_file.exists():
+            dense_npz = np.load(kb.embeddings_file)
+            dims = dense_npz["embeddings"].shape[1]
+            print(f"Dense embeddings: yes ({dims} dims, {dense_npz['embeddings'].shape[0]} vectors)")
+        elif provider:
+            print(f"Dense embeddings: available but not built (run 'build --embed'). Provider: {detail}")
+        else:
+            print(f"Dense embeddings: not available. {detail}")
+
+        print(f"Topic clusters: {len(json.loads(kb.clusters_file.read_text())) if kb.clusters_file.exists() else 0}")
+
+        if kb.graph_file.exists():
+            g = json.loads(kb.graph_file.read_text())
+            print(f"Link graph: {g['node_count']} nodes, {g['edge_count']} edges, {g['orphan_count']} orphans")
+
+        print(f"Top tags: {json.dumps(dict(sorted(all_tags.items(), key=lambda x: -x[1])[:20]), indent=2)}")
+        print()
+
+    # Show unified stats if multiple KBs and no specific KB requested
+    if not kb_name and len(kbs_to_show) > 1:
+        unified_meta_file = UNIFIED_DIR / "metadata.json"
+        if unified_meta_file.exists():
+            unified_metadata = json.loads(unified_meta_file.read_text())
+            print(f"=== UNIFIED (searchable) ===")
+            print(f"Total notes: {len(unified_metadata)}")
+            print(f"Grand total words: {grand_total_words:,}")
 
 
 # ---------------------------------------------------------------------------
@@ -1473,6 +1978,14 @@ def stats():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Extract global --kb flag before command dispatch
+    kb_name = None
+    if "--kb" in sys.argv:
+        idx = sys.argv.index("--kb")
+        if idx + 1 < len(sys.argv):
+            kb_name = sys.argv[idx + 1]
+            sys.argv = sys.argv[:idx] + sys.argv[idx+2:]
+
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
@@ -1481,18 +1994,48 @@ if __name__ == "__main__":
 
     if cmd == "build":
         incremental = "--incremental" in sys.argv
-        build_index(incremental=incremental)
-        if "--embed" in sys.argv:
-            notes_list = sorted(NOTES.glob("*.md"))
-            slugs = [p.stem for p in notes_list]
-            texts = []
-            for p in notes_list:
-                fm, body, _ = parse_note(p)
-                texts.append(extract_contextual_text(fm, body))
-            build_dense_embeddings(slugs, texts)
+        do_embed = "--embed" in sys.argv
+        build_index(incremental=incremental, kb_name=kb_name)
+
+        if do_embed:
+            # Build dense embeddings for specified or all KBs
+            reg = get_registry()
+            if kb_name:
+                kbs_to_embed = [resolve_kb(kb_name)]
+            else:
+                kbs_to_embed = reg.all_kbs()
+
+            all_unified_slugs = []
+            all_unified_texts = []
+            for kb in kbs_to_embed:
+                if not kb.notes_dir.exists():
+                    continue
+                notes_list = sorted(kb.notes_dir.glob("*.md"))
+                kb_slugs = [p.stem for p in notes_list]
+                kb_texts = []
+                for p in notes_list:
+                    fm, body, _ = parse_note(p)
+                    kb_texts.append(extract_contextual_text(fm, body))
+                build_dense_embeddings(kb_slugs, kb_texts, kb_config=kb)
+
+                if not kb.private:
+                    for i, s in enumerate(kb_slugs):
+                        all_unified_slugs.append(f"{kb.name}:{s}")
+                        all_unified_texts.append(kb_texts[i])
+
+            # Build unified dense embeddings
+            if not kb_name and all_unified_slugs:
+                build_dense_embeddings(all_unified_slugs, all_unified_texts, kb_config=None)
         else:
             provider, detail = detect_embedding_provider()
-            if EMBEDDINGS_FILE.exists():
+            # Check any KB for existing embeddings
+            any_embeddings = False
+            reg = get_registry()
+            for kb in reg.all_kbs():
+                if kb.embeddings_file.exists():
+                    any_embeddings = True
+                    break
+            if any_embeddings:
                 print(f"Dense embeddings: cached (run 'build --embed' to rebuild)")
             elif provider:
                 print(f"Dense embeddings: available via {detail} (run 'build --embed' to enable)")
@@ -1501,7 +2044,7 @@ if __name__ == "__main__":
 
     elif cmd == "search":
         if len(sys.argv) < 3:
-            print("Usage: kb-index.py search 'query' [--tags t1,t2] [--type concept] [--multi 'q2' 'q3']")
+            print("Usage: kb-index.py search 'query' [--tags t1,t2] [--type concept] [--multi 'q2' 'q3'] [--kb name]")
             sys.exit(1)
         query = sys.argv[2]
         tags = None
@@ -1517,7 +2060,6 @@ if __name__ == "__main__":
                 note_type = sys.argv[i + 1]
                 i += 2
             elif arg == "--multi":
-                # Collect all remaining non-flag arguments as extra queries
                 i += 1
                 while i < len(sys.argv) and not sys.argv[i].startswith("--"):
                     extra_queries.append(sys.argv[i])
@@ -1527,65 +2069,77 @@ if __name__ == "__main__":
 
         if extra_queries:
             all_queries = [query] + extra_queries
-            results = multi_search(all_queries, tags=tags, note_type=note_type)
+            results = multi_search(all_queries, tags=tags, note_type=note_type, kb_name=kb_name)
         else:
-            results = search(query, tags=tags, note_type=note_type)
+            results = search(query, tags=tags, note_type=note_type, kb_name=kb_name)
         for r in results:
-            dep = " [DEPRECATED]" if r["deprecated"] else ""
-            print(f"  {r['score']:.4f}  {r['slug']}{dep}")
+            dep = " [DEPRECATED]" if r.get("deprecated") else ""
+            kb_label = f" [{r['kb']}]" if r.get("kb") else ""
+            print(f"  {r['score']:.4f}  {r['slug']}{dep}{kb_label}")
             print(f"           {r['title']} ({r['type']}) [{', '.join(r['tags'][:5])}]")
 
     elif cmd == "similar":
         if len(sys.argv) < 3:
-            print("Usage: kb-index.py similar <note-slug>")
+            print("Usage: kb-index.py similar <note-slug> [--kb name]")
             sys.exit(1)
-        results = find_similar(sys.argv[2])
+        results = find_similar(sys.argv[2], kb_name=kb_name)
         for r in results:
-            print(f"  {r['score']:.4f}  {r['slug']} — {r['title']}")
+            kb_label = f" [{r['kb']}]" if r.get("kb") else ""
+            print(f"  {r['score']:.4f}  {r['slug']}{kb_label} -- {r['title']}")
 
     elif cmd == "contradictions":
         if len(sys.argv) < 3:
-            print("Usage: kb-index.py contradictions <note-slug>")
+            print("Usage: kb-index.py contradictions <note-slug> [--kb name]")
             sys.exit(1)
-        results = check_contradictions(sys.argv[2])
+        results = check_contradictions(sys.argv[2], kb_name=kb_name)
         for r in results:
-            print(f"  {r['score']:.4f}  {r['slug']} — {r['warning']}")
+            kb_label = f" [{r['kb']}]" if r.get("kb") else ""
+            print(f"  {r['score']:.4f}  {r['slug']}{kb_label} -- {r['warning']}")
 
     elif cmd == "stale":
         days = int(sys.argv[2]) if len(sys.argv) > 2 else None
-        results = find_stale(days)
+        results = find_stale(days, kb_name=kb_name)
         threshold = days or cfg("staleness", "default_days")
         print(f"Stale notes (>{threshold} days or expired):")
         for r in results:
-            print(f"  {r['slug']} — {', '.join(r['reasons'])}")
+            kb_label = f" [{r['kb']}]" if r.get("kb") else ""
+            print(f"  {r['slug']}{kb_label} -- {', '.join(r['reasons'])}")
 
     elif cmd == "stale-syntheses":
-        results = find_stale_syntheses()
+        results = find_stale_syntheses(kb_name=kb_name)
         if not results:
             print("No stale synthesis notes found.")
         else:
             print(f"Stale synthesis notes ({len(results)}):")
             for r in results:
-                print(f"  {r['slug']} (updated {r['last_updated']})")
+                kb_label = f" [{r['kb']}]" if r.get("kb") else ""
+                print(f"  {r['slug']}{kb_label} (updated {r['last_updated']})")
                 for dep in r["stale_dependencies"]:
-                    print(f"    → {dep}")
+                    print(f"    -> {dep}")
 
     elif cmd == "coverage":
         if len(sys.argv) < 3:
-            print("Usage: kb-index.py coverage 'topic'")
+            print("Usage: kb-index.py coverage 'topic' [--kb name]")
             sys.exit(1)
-        result = check_coverage(sys.argv[2])
+        result = check_coverage(sys.argv[2], kb_name=kb_name)
         print(f"Coverage: {result['level']} (confidence: {result['confidence']})")
         if result.get("notes"):
             print("Relevant notes:")
             for n in result["notes"]:
-                print(f"  {n['score']:.4f}  {n['slug']}")
+                kb_label = f" [{n['kb']}]" if n.get("kb") else ""
+                print(f"  {n['score']:.4f}  {n['slug']}{kb_label}")
 
     elif cmd == "clusters":
-        if not CLUSTERS_FILE.exists():
+        if kb_name:
+            kb = resolve_kb(kb_name)
+            clusters_file = kb.clusters_file
+        else:
+            clusters_file = UNIFIED_DIR / "clusters.json"
+
+        if not clusters_file.exists():
             print("No clusters. Run: python3 .kb/kb-index.py build")
             sys.exit(1)
-        clusters = json.loads(CLUSTERS_FILE.read_text())
+        clusters = json.loads(clusters_file.read_text())
         print(f"Topic clusters ({len(clusters)}):")
         for tag, data in sorted(clusters.items(), key=lambda x: -x[1]["count"]):
             print(f"  {tag} ({data['count']} notes)")
@@ -1594,32 +2148,30 @@ if __name__ == "__main__":
 
     elif cmd == "lint":
         target = sys.argv[2] if len(sys.argv) > 2 else None
-        results = lint_all(target)
+        results = lint_all(target, kb_name=kb_name)
         if not results:
-            print("All notes pass lint checks. ✓")
+            print("All notes pass lint checks.")
         else:
             total_issues = sum(len(v) for v in results.values())
             errors = sum(1 for v in results.values() for sev, _ in v if sev == "error")
-            warnings = sum(1 for v in results.values() for sev, _ in v if sev == "warning")
+            warnings_count = sum(1 for v in results.values() for sev, _ in v if sev == "warning")
             infos = sum(1 for v in results.values() for sev, _ in v if sev == "info")
-            print(f"Lint: {len(results)} notes with issues ({errors} errors, {warnings} warnings, {infos} info)")
+            print(f"Lint: {len(results)} notes with issues ({errors} errors, {warnings_count} warnings, {infos} info)")
             print()
             for slug, issues in sorted(results.items()):
                 print(f"  {slug}:")
                 for severity, msg in issues:
-                    icon = {"error": "✗", "warning": "⚠", "info": "ℹ"}[severity]
+                    icon = {"error": "X", "warning": "!", "info": "i"}[severity]
                     print(f"    {icon} [{severity}] {msg}")
 
     elif cmd == "graph":
         subcmd = sys.argv[2] if len(sys.argv) > 2 else "summary"
 
         if subcmd == "summary":
-            if not GRAPH_FILE.exists():
-                print("No graph. Run: python3 .kb/kb-index.py build")
-                sys.exit(1)
-            g = load_graph()
-            comps = graph_components()
-            print(f"Link graph:")
+            g = load_graph(kb_name)
+            comps = graph_components(kb_name)
+            label = kb_name or "unified"
+            print(f"Link graph ({label}):")
             print(f"  Nodes: {g['node_count']}")
             print(f"  Edges: {g['edge_count']}")
             print(f"  Orphans: {g['orphan_count']}")
@@ -1629,13 +2181,13 @@ if __name__ == "__main__":
                 print(f"  Smallest component: {len(comps[-1])} nodes")
 
         elif subcmd == "orphans":
-            orphans = graph_orphans()
-            print(f"Orphan notes ({len(orphans)}) — no incoming or outgoing links:")
+            orphans = graph_orphans(kb_name)
+            print(f"Orphan notes ({len(orphans)}) -- no incoming or outgoing links:")
             for s in orphans:
                 print(f"  {s}")
 
         elif subcmd == "components":
-            comps = graph_components()
+            comps = graph_components(kb_name)
             print(f"Connected components ({len(comps)}):")
             for i, comp in enumerate(comps):
                 if len(comp) <= 5:
@@ -1645,11 +2197,11 @@ if __name__ == "__main__":
 
         elif subcmd == "neighbors":
             if len(sys.argv) < 4:
-                print("Usage: kb-index.py graph neighbors <slug> [hops]")
+                print("Usage: kb-index.py graph neighbors <slug> [hops] [--kb name]")
                 sys.exit(1)
             slug = sys.argv[3]
             hops = int(sys.argv[4]) if len(sys.argv) > 4 else 2
-            neighbors = graph_neighbors(slug, hops)
+            neighbors = graph_neighbors(slug, hops, kb_name=kb_name)
             if not neighbors:
                 print(f"No neighbors found for '{slug}' within {hops} hops.")
             else:
@@ -1658,13 +2210,13 @@ if __name__ == "__main__":
                     print(f"  {d} hop{'s' if d > 1 else ' '}  {s}")
 
         elif subcmd == "bridges":
-            bridges = graph_bridges()
+            bridges = graph_bridges(kb_name)
             if not bridges:
                 print("No bridge notes found (graph is well-connected or fully disconnected).")
             else:
-                print(f"Bridge notes ({len(bridges)}) — removal increases component count:")
+                print(f"Bridge notes ({len(bridges)}) -- removal increases component count:")
                 for b in bridges:
-                    print(f"  {b['slug']} → {b['components_after_removal']} components")
+                    print(f"  {b['slug']} -> {b['components_after_removal']} components")
 
         else:
             print(f"Unknown graph subcommand: {subcmd}")
@@ -1673,24 +2225,25 @@ if __name__ == "__main__":
     elif cmd == "backlink":
         target = sys.argv[2] if len(sys.argv) > 2 else None
         targets = [target] if target else None
-        changes = auto_backlink(targets)
+        changes = auto_backlink(targets, kb_name=kb_name)
         if not changes:
             print("All backlinks are up to date.")
         else:
             print(f"Added {len(changes)} backlinks:")
             for src, tgt, action in changes:
-                print(f"  {src} → {tgt}: {action}")
+                print(f"  {src} -> {tgt}: {action}")
 
     elif cmd == "quick":
         if len(sys.argv) < 3:
-            print("Usage: kb-index.py quick 'query'")
+            print("Usage: kb-index.py quick 'query' [--kb name]")
             sys.exit(1)
-        results = quick_search(sys.argv[2])
+        results = quick_search(sys.argv[2], kb_name=kb_name)
         if not results:
             print("No matches. Try full search: kb-index.py search 'query'")
         else:
             for r in results:
-                print(f"  {r['score']:.2f}  {r['slug']}")
+                kb_label = f" [{r['kb']}]" if r.get("kb") else ""
+                print(f"  {r['score']:.2f}  {r['slug']}{kb_label}")
                 print(f"        {r['title']} ({r['type']}) matched: {', '.join(r['match'])}")
 
     elif cmd == "feedback":
@@ -1720,14 +2273,14 @@ if __name__ == "__main__":
             print("Usage: kb-index.py feedback [summary|log]")
 
     elif cmd == "map":
-        tmap = topic_map()
+        tmap = topic_map(kb_name)
         if not tmap:
             print("No data. Run: python3 .kb/kb-index.py build")
         else:
             print(f"Topic Map ({len(tmap)} topics):\n")
             for tag, data in sorted(tmap.items(), key=lambda x: -x[1]["count"]):
                 types_str = ", ".join(f"{t}:{c}" for t, c in sorted(data["types"].items()))
-                density_bar = "█" * int(data["link_density"] * 20)
+                density_bar = "=" * int(data["link_density"] * 20)
                 print(f"  {tag} ({data['count']} notes, ~{data['avg_words']} words/note)")
                 print(f"    types: {types_str}")
                 print(f"    density: {data['link_density']:.1%} {density_bar}")
@@ -1736,24 +2289,29 @@ if __name__ == "__main__":
 
     elif cmd == "explore":
         if len(sys.argv) < 3:
-            print("Usage: kb-index.py explore <start-slug> [max-steps]")
+            print("Usage: kb-index.py explore <start-slug> [max-steps] [--kb name]")
             sys.exit(1)
         slug = sys.argv[2]
         steps = int(sys.argv[3]) if len(sys.argv) > 3 else 5
-        path = explore_path(slug, steps)
+        path = explore_path(slug, steps, kb_name=kb_name)
         if not path:
             print(f"No path from '{slug}'.")
         else:
-            metadata = json.loads(META_FILE.read_text())
+            if kb_name:
+                kb = resolve_kb(kb_name)
+                meta_file = kb.meta_file
+            else:
+                meta_file = UNIFIED_DIR / "metadata.json"
+            metadata = json.loads(meta_file.read_text())
             print(f"Reading path from '{slug}' ({len(path)} notes):\n")
             for i, s in enumerate(path):
                 meta = metadata.get(s, {})
-                arrow = "  →" if i > 0 else "   "
+                arrow = "  ->" if i > 0 else "   "
                 print(f"  {arrow} {i+1}. [{meta.get('type','')}] {meta.get('title', s)}")
                 print(f"       {s} ({meta.get('word_count', '?')} words)")
 
     elif cmd == "gaps":
-        gaps = find_topic_gaps()
+        gaps = find_topic_gaps(kb_name)
         if not gaps:
             print("No significant topic gaps found.")
         else:
@@ -1792,7 +2350,7 @@ if __name__ == "__main__":
             print("Usage: kb-index.py eval [retrieval|generation|all] [--verbose]")
 
     elif cmd == "stats":
-        stats()
+        stats(kb_name)
 
     else:
         print(f"Unknown command: {cmd}")

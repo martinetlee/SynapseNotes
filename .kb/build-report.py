@@ -15,11 +15,44 @@ from datetime import date
 from pathlib import Path
 
 BASE = Path(__file__).parent.parent
-NOTES = BASE / "notes"
 REFS = BASE / "references"
 TEMPLATE = BASE / ".kb" / "templates" / "report.html"
 PUBLISH = BASE / "publish"
 CONFIG_FILE = BASE / ".kb" / "config.yaml"
+KBS_REGISTRY = BASE / "kbs.yaml"
+
+
+def _load_kb_dirs():
+    """Load KB directories from kbs.yaml registry. Falls back to notes/ for legacy layout."""
+    if KBS_REGISTRY.exists():
+        try:
+            registry = yaml.safe_load(KBS_REGISTRY.read_text()) or {}
+            dirs = []
+            for name, info in registry.get("kbs", {}).items():
+                kb_path = BASE / info.get("path", f"kbs/{name}")
+                if kb_path.is_dir():
+                    dirs.append(kb_path)
+            if dirs:
+                return dirs
+        except yaml.YAMLError:
+            pass
+    # Legacy fallback
+    legacy = BASE / "notes"
+    if legacy.is_dir():
+        return [legacy]
+    return []
+
+
+def find_note(slug):
+    """Find a note file across all KBs. Returns the Path or None."""
+    # Support cross-KB syntax "kb:slug" — strip the prefix
+    if ":" in slug:
+        slug = slug.split(":", 1)[1]
+    for kb_dir in _load_kb_dirs():
+        candidate = kb_dir / f"{slug}.md"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def load_hub_threshold():
@@ -50,7 +83,9 @@ def parse_note(filepath):
 
 def get_source_url(ref_path):
     """Extract Source: URL from a reference file."""
-    full_path = REFS / ref_path.replace("../references/", "").replace("references/", "")
+    # Strip any relative prefix depth (../../references/, ../references/, references/)
+    cleaned = re.sub(r"^(\.\./)*references/", "", ref_path)
+    full_path = REFS / cleaned
     if not full_path.exists():
         return None
     text = full_path.read_text()
@@ -66,15 +101,17 @@ def get_source_url(ref_path):
 def resolve_wikilinks_and_citations(html, footnotes, included_slugs):
     """Post-process HTML to resolve wikilinks and citations into anchors/footnotes."""
 
-    # Wikilinks: [[slug|text]] or [[slug]]
+    # Wikilinks: [[kb:slug|text]], [[slug|text]], [[kb:slug]], or [[slug]]
     def replace_wikilink(m):
         inner = m.group(1)
         if "|" in inner:
-            slug, text = inner.split("|", 1)
+            raw_slug, text = inner.split("|", 1)
         else:
-            slug = text = inner
-        slug = slug.strip()
+            raw_slug = text = inner
+        raw_slug = raw_slug.strip()
         text = text.strip()
+        # Strip cross-KB prefix (e.g. "blockchain-security:some-slug" → "some-slug")
+        slug = raw_slug.split(":", 1)[1] if ":" in raw_slug else raw_slug
         if slug in included_slugs:
             return f'<a class="wikilink" href="#{slug}" data-target="{slug}">{text}</a>'
         else:
@@ -91,11 +128,11 @@ def resolve_wikilinks_and_citations(html, footnotes, included_slugs):
             footnotes.append((fn_num, text, url))
             return f'{text}<span class="footnote-ref" data-fn="{fn_num}">[{fn_num}]</span>'
         return text
-    html = re.sub(r'<a href="(\.\.\/references\/[^"]+|references\/[^"]+)">([^<]+)</a>',
+    html = re.sub(r'<a href="((?:\.\.\/)+references\/[^"]+|references\/[^"]+)">([^<]+)</a>',
                   lambda m: replace_ref_citation(type('M', (), {'group': lambda self, n: [None, m.group(2), m.group(1)][n]})()),
                   html)
     # Also catch any raw markdown-style citations that python-markdown didn't convert
-    html = re.sub(r"\[([^\]]+)\]\((\.\.\/references\/[^)]+|references\/[^)]+)\)",
+    html = re.sub(r"\[([^\]]+)\]\(((?:\.\.\/)+references\/[^)]+|references\/[^)]+)\)",
                   replace_ref_citation, html)
 
     # External URL links → footnotes
@@ -142,10 +179,10 @@ def md_to_html(md_text, footnotes, included_slugs):
 
 
 def build_report(slug, custom_title=None):
-    """Build an HTML report from a note or hub."""
-    note_path = NOTES / f"{slug}.md"
-    if not note_path.exists():
-        print(f"Error: {note_path} not found")
+    """Build an HTML report from a note or hub. Searches all KBs."""
+    note_path = find_note(slug)
+    if not note_path:
+        print(f"Error: note '{slug}' not found in any KB")
         sys.exit(1)
 
     fm, body = parse_note(note_path)
@@ -167,11 +204,13 @@ def build_report(slug, custom_title=None):
         notes_to_include.append(("__intro__", fm, body))
         included_slugs.add(slug)
         for rs in related_slugs:
-            rpath = NOTES / f"{rs}.md"
-            if rpath.exists():
+            # Strip cross-KB prefix if present
+            bare_slug = rs.split(":", 1)[1] if ":" in rs else rs
+            rpath = find_note(bare_slug)
+            if rpath:
                 rfm, rbody = parse_note(rpath)
-                notes_to_include.append((rs, rfm, rbody))
-                included_slugs.add(rs)
+                notes_to_include.append((bare_slug, rfm, rbody))
+                included_slugs.add(bare_slug)
     else:
         notes_to_include.append((slug, fm, body))
         included_slugs.add(slug)

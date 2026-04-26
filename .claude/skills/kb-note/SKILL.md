@@ -2,12 +2,14 @@
 name: kb-note
 description: Extract topics and Q&A from the current conversation and save selected ones as notes
 user_invocable: true
-arguments: Optional filter or hint about what to extract (e.g. "the discussion about TCP")
+arguments: "Optional filter or hint about what to extract (e.g. 'the discussion about TCP'). Optional: --kb <name> to target a specific KB (default: general)"
 ---
 
 # /kb-note
 
 You are helping the user capture knowledge from the current conversation into their knowledge base.
+
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, ask which KB to save to (default: `general`). Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
 
 ## Steps
 
@@ -29,11 +31,11 @@ You are helping the user capture knowledge from the current conversation into th
 
 4. **For each selected candidate**:
 
-   a. Search existing notes for overlap (Glob + Grep in `notes/`)
+   a. Search existing notes for overlap (Glob + Grep in `kbs/<kb_name>/` and other KBs)
    
    b. If a closely related note exists, show the user and ask: update existing or create new?
    
-   c. Create/update the note following CLAUDE.md format
+   c. Create/update the note in `kbs/<kb_name>/` following CLAUDE.md format. Citation paths to references use `../../references/filename.md` (two levels up from `kbs/<kb_name>/`).
    
    d. Add `[[wikilinks]]` to related notes in both directions
    
@@ -52,7 +54,7 @@ Pick the type based on content:
 - **reference**: Information from an external source discussed
 - **insight**: Original observation, connection, or conclusion
 
-**Type balance nudge**: Before presenting candidates, run `python3 .kb/kb-index.py stats` to see the current type distribution. If `question` or `insight` types are underrepresented (< 15% each), actively look for conversation content that fits those types. For example:
+**Type balance nudge**: Before presenting candidates, run `python3 .kb/kb-index.py stats --kb <kb_name>` to see the current type distribution. If `question` or `insight` types are underrepresented (< 15% each), actively look for conversation content that fits those types. For example:
 - A debugging discussion often contains an implicit **question** ("Why does X happen?") worth capturing
 - A comparison or tradeoff discussion often contains an **insight** ("X is better than Y when Z") worth capturing
 - Don't force a type that doesn't fit — but do consider whether `concept` is really the best type or whether `question` or `insight` would be more accurate
