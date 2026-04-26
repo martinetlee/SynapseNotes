@@ -388,14 +388,14 @@ def build_link_graph_html(graph_data, metadata, topic_data, cluster_colors):
 
     graph_json = json.dumps({"nodes": nodes, "edges": edges})
 
-    return f"""<div id="link-graph-container" style="width:100%;max-width:800px;height:600px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface);"></div>
+    return f"""<div id="link-graph-container" style="width:100%;max-width:100%;height:700px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface);position:relative;"></div>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script>
 (function() {{
   var data = {graph_json};
   var container = document.getElementById('link-graph-container');
   var width = container.clientWidth || 800;
-  var height = 600;
+  var height = 700;
 
   var svg = d3.select(container).append('svg')
     .attr('width', width).attr('height', height)
@@ -909,6 +909,58 @@ def build_retrieval_heatmap_html():
     return "\n".join(parts)
 
 
+def build_research_gaps_html():
+    """Build comprehensive research gaps list grouped by hub."""
+    try:
+        gaps_data = kb.find_research_gaps()
+    except Exception:
+        return '<p class="empty">Could not load research gaps.</p>'
+
+    if not gaps_data:
+        return '<p class="empty">No research gaps found. Research hubs with a <code>gaps</code> frontmatter field will appear here.</p>'
+
+    # Sort by most gaps first
+    gaps_data = sorted(gaps_data, key=lambda g: -len(g["gaps"]))
+    total_gaps = sum(len(g["gaps"]) for g in gaps_data)
+
+    parts = []
+    parts.append(
+        f'<div class="gaps-header">'
+        f'<span class="gaps-total">{total_gaps}</span>'
+        f'<span class="gaps-total-label">open research gaps across {len(gaps_data)} hubs</span>'
+        f'</div>'
+    )
+
+    for gd in gaps_data:
+        n_gaps = len(gd["gaps"])
+        title = gd.get("title", gd["hub"])
+
+        # Color by severity: 1-3 yellow, 4-6 orange, 7+ red
+        if n_gaps >= 7:
+            border_color = "#ef4444"
+        elif n_gaps >= 4:
+            border_color = "#f97316"
+        else:
+            border_color = "#eab308"
+
+        gap_items = "".join(
+            f'<li class="gap-item">{escape(gap)}</li>'
+            for gap in gd["gaps"]
+        )
+
+        parts.append(
+            f'<div class="gap-hub" style="border-left:4px solid {border_color};">'
+            f'<div class="gap-hub-header">'
+            f'<span class="gap-hub-title">{escape(title)}</span>'
+            f'<span class="gap-hub-count">{n_gaps}</span>'
+            f'</div>'
+            f'<ul class="gap-list">{gap_items}</ul>'
+            f'</div>'
+        )
+
+    return "\n".join(parts)
+
+
 def build_dashboard():
     """Build the full dashboard HTML."""
     topic_data = load_topic_map()
@@ -935,6 +987,7 @@ def build_dashboard():
     research_depth_html = build_research_depth_html(all_metadata)
     gap_burden_html = build_gap_burden_html()
     retrieval_heatmap_html = build_retrieval_heatmap_html()
+    research_gaps_html = build_research_gaps_html()
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -980,7 +1033,7 @@ body {{
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }}
@@ -996,6 +1049,34 @@ body {{
   font-size: 13px;
 }}
 .theme-toggle:hover {{ background: var(--border); }}
+
+/* Tabs */
+.tabs {{
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0;
+}}
+.tab {{
+  padding: 8px 20px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.15s;
+}}
+.tab:hover {{ color: var(--text); }}
+.tab.active {{
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}}
+.tab-content {{ display: none; }}
+.tab-content.active {{ display: block; }}
 
 /* Sections */
 .section {{
@@ -1013,7 +1094,7 @@ body {{
 .summary {{
   display: flex;
   gap: 32px;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
 }}
 .summary .stat {{
   text-align: center;
@@ -1218,6 +1299,75 @@ body {{
   color: var(--muted);
 }}
 
+/* Research Gaps */
+.gaps-header {{
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}}
+.gaps-total {{
+  font-size: 32px;
+  font-weight: 700;
+  color: #ef4444;
+}}
+.gaps-total-label {{
+  font-size: 14px;
+  color: var(--muted);
+}}
+.gap-hub {{
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border-radius: 6px;
+}}
+.gap-hub-header {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}}
+.gap-hub-title {{
+  font-weight: 700;
+  font-size: 15px;
+}}
+.gap-hub-count {{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--border);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}}
+.gap-list {{
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}}
+.gap-item {{
+  padding: 5px 0;
+  font-size: 13px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}}
+.gap-item:last-child {{
+  border-bottom: none;
+}}
+.gap-item::before {{
+  content: "\\2022";
+  color: var(--muted);
+  margin-right: 8px;
+}}
+
 .empty {{
   color: var(--muted);
   font-style: italic;
@@ -1228,6 +1378,7 @@ body {{
 @media (max-width: 700px) {{
   body {{ padding: 12px; }}
   .summary {{ flex-wrap: wrap; gap: 16px; }}
+  .tabs {{ overflow-x: auto; }}
   .timeline {{ padding-left: 20px; margin-left: 0; }}
   .tl-date {{ position: static; width: auto; text-align: left; font-weight: 600; }}
   .tl-dot {{ left: -28px; }}
@@ -1251,56 +1402,81 @@ body {{
   <div class="stat"><span class="stat-num">{len(log_entries)}</span><span class="stat-label">Sessions</span></div>
 </div>
 
-<div class="section">
-  <h2>Topic Clusters</h2>
-  {treemap_html}
-  {type_bar_html}
+<div class="tabs">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="graph">Knowledge Graph</button>
+  <button class="tab" data-tab="research">Research</button>
+  <button class="tab" data-tab="quality">Quality</button>
 </div>
 
-<div class="section">
-  <h2>Knowledge Bases</h2>
-  {kb_cards_html}
+<!-- Tab 1: Overview -->
+<div class="tab-content active" id="tab-overview">
+  <div class="section">
+    <h2>Knowledge Bases</h2>
+    {kb_cards_html}
+  </div>
+
+  <div class="section">
+    <h2>Topic Clusters</h2>
+    {treemap_html}
+    {type_bar_html}
+  </div>
+
+  <div class="section">
+    <h2>Notes Created Over Time</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Cumulative note count by type, grouped by month.</p>
+    {notes_over_time_html}
+  </div>
 </div>
 
-<div class="section">
-  <h2>Research Timeline</h2>
-  {timeline_html}
+<!-- Tab 2: Knowledge Graph -->
+<div class="tab-content" id="tab-graph">
+  <div class="section">
+    <h2>Link Graph</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Force-directed graph of note connections. Nodes colored by cluster, sized by link count. Click a node to highlight its neighbors. Drag to rearrange, scroll to zoom.</p>
+    {link_graph_html}
+  </div>
+
+  <div class="section">
+    <h2>Coverage Radar</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Top topic clusters compared across four axes: note count, link density, type diversity, and freshness (how recently updated).</p>
+    {coverage_radar_html}
+  </div>
 </div>
 
-<div class="section">
-  <h2>Link Graph</h2>
-  <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Force-directed graph of note connections. Nodes colored by cluster, sized by link count. Click a node to highlight its neighbors. Drag to rearrange, scroll to zoom.</p>
-  {link_graph_html}
+<!-- Tab 3: Research -->
+<div class="tab-content" id="tab-research">
+  <div class="section">
+    <h2>Open Research Gaps</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Unresolved gaps grouped by research hub. Border color indicates severity: yellow (1-3), orange (4-6), red (7+).</p>
+    {research_gaps_html}
+  </div>
+
+  <div class="section">
+    <h2>Research Timeline</h2>
+    {timeline_html}
+  </div>
+
+  <div class="section">
+    <h2>Research Depth Heatmap</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Research hubs with spawned notes, open gaps, and staleness. Cells colored by intensity.</p>
+    {research_depth_html}
+  </div>
 </div>
 
-<div class="section">
-  <h2>Notes Created Over Time</h2>
-  <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Cumulative note count by type, grouped by month.</p>
-  {notes_over_time_html}
-</div>
+<!-- Tab 4: Quality -->
+<div class="tab-content" id="tab-quality">
+  <div class="section">
+    <h2>Gap Burden</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Open research gaps per hub. More gaps shifts the color toward red.</p>
+    {gap_burden_html}
+  </div>
 
-<div class="section">
-  <h2>Coverage Radar</h2>
-  <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Top topic clusters compared across four axes: note count, link density, type diversity, and freshness (how recently updated).</p>
-  {coverage_radar_html}
-</div>
-
-<div class="section">
-  <h2>Research Depth Heatmap</h2>
-  <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Research hubs with spawned notes, open gaps, and staleness. Cells colored by intensity.</p>
-  {research_depth_html}
-</div>
-
-<div class="section">
-  <h2>Gap Burden</h2>
-  <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Open research gaps per hub. More gaps shifts the color toward red.</p>
-  {gap_burden_html}
-</div>
-
-<div class="section">
-  <h2>Retrieval Heatmap</h2>
-  <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Search feedback analysis: which notes are most frequently missed by retrieval, and which queries fail.</p>
-  {retrieval_heatmap_html}
+  <div class="section">
+    <h2>Retrieval Heatmap</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Search feedback analysis: which notes are most frequently missed by retrieval, and which queries fail.</p>
+    {retrieval_heatmap_html}
+  </div>
 </div>
 
 <script>
@@ -1317,6 +1493,22 @@ function toggleTheme() {{
       document.documentElement.setAttribute('data-theme', 'dark');
   }} catch(e) {{}}
 }})();
+
+// Tab switching
+document.querySelectorAll('.tab').forEach(function(btn) {{
+  btn.addEventListener('click', function() {{
+    document.querySelectorAll('.tab').forEach(function(t) {{ t.classList.remove('active'); }});
+    document.querySelectorAll('.tab-content').forEach(function(c) {{ c.style.display = 'none'; c.classList.remove('active'); }});
+    btn.classList.add('active');
+    var target = document.getElementById('tab-' + btn.dataset.tab);
+    target.style.display = 'block';
+    target.classList.add('active');
+    // Force D3 graph resize when switching to graph tab
+    if (btn.dataset.tab === 'graph') {{
+      window.dispatchEvent(new Event('resize'));
+    }}
+  }});
+}});
 </script>
 </body>
 </html>"""
