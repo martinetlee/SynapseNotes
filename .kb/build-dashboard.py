@@ -345,10 +345,18 @@ def build_link_graph_html(graph_data, metadata, topic_data, cluster_colors):
         in_count = len(links.get("incoming", []))
         degree[slug] = out_count + in_count
 
-    # Limit to top 100 most-connected if > 150 nodes
+    # Limit nodes: take top 100 by degree, then include their direct neighbors
+    # so no node appears without edges
     slugs = list(adj.keys())
     if len(slugs) > 150:
-        slugs = sorted(slugs, key=lambda s: -degree.get(s, 0))[:100]
+        top_slugs = sorted(slugs, key=lambda s: -degree.get(s, 0))[:100]
+        slug_set = set(top_slugs)
+        # Add direct neighbors of top nodes so edges are visible
+        for s in top_slugs:
+            for t in adj.get(s, {}).get("outgoing", []) + adj.get(s, {}).get("incoming", []):
+                if t in adj:
+                    slug_set.add(t)
+        slugs = list(slug_set)
     slug_set = set(slugs)
 
     # Map each node to its primary cluster
