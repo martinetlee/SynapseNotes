@@ -2,7 +2,7 @@
 name: kb-explain
 description: Synthesize a coherent narrative explanation of a topic from multiple KB notes
 user_invocable: true
-arguments: "The topic to explain. Optional: --kb <name> to search a specific KB (default: all non-private KBs)"
+arguments: "The topic to explain. Optional: --kb name to scope to a specific KB"
 ---
 
 # /kb-explain

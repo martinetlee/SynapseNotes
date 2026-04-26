@@ -2,7 +2,7 @@
 name: kb-question
 description: Ask a question and Claude saves the answer as an atomic note in the knowledge base
 user_invocable: true
-arguments: "The question to research and note down. Optional: --kb <name> to target a specific KB (default: general)"
+arguments: "The question to research and note down. Optional: --kb name"
 ---
 
 # /kb-question

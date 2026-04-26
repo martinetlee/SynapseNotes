@@ -2,7 +2,7 @@
 name: kb-search
 description: Search the knowledge base and synthesize an answer from matching notes
 user_invocable: true
-arguments: "The search query. Optional: --kb <name> to search a specific KB (default: all non-private KBs)"
+arguments: "The search query. Optional: --kb name"
 ---
 
 # /kb-search

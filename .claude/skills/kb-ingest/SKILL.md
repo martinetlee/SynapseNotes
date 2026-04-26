@@ -2,7 +2,7 @@
 name: kb-ingest
 description: Extract atomic notes from files in references/ or from URLs (fetched content saved to references/)
 user_invocable: true
-arguments: "Filename in references/, glob pattern, or URL to fetch. Optional: --kb <name> to target a specific KB (default: general)"
+arguments: "Filename in references/, glob pattern, or URL to fetch. Optional: --kb name"
 ---
 
 # /kb-ingest

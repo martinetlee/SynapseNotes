@@ -2,7 +2,7 @@
 name: kb-note
 description: Extract topics and Q&A from the current conversation and save selected ones as notes
 user_invocable: true
-arguments: "Optional filter or hint about what to extract (e.g. 'the discussion about TCP'). Optional: --kb <name> to target a specific KB (default: general)"
+arguments: "Optional filter or hint about what to extract. Optional: --kb name"
 ---
 
 # /kb-note

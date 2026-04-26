@@ -2,7 +2,7 @@
 name: kb-review
 description: Audit the knowledge base for quality issues and suggest improvements
 user_invocable: true
-arguments: "Optional focus area, e.g. tags, links, duplicates. Optional: --kb <name> to scope to a specific KB (default: all KBs)"
+arguments: "Optional focus area e.g. tags, links, duplicates. Optional: --kb name"
 ---
 
 # /kb-review

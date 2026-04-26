@@ -2,7 +2,7 @@
 name: kb-research
 description: Agentic research loop that deeply investigates a topic via web search and saves findings as atomic notes
 user_invocable: true
-arguments: "Topic to research. Optional flags: --depth shallow or medium or deep, --checkpoint plan or each or end, --kb <name> to target a specific KB (default: general)"
+arguments: "Topic to research. Flags: --depth shallow/medium/deep, --checkpoint plan/each/end, --kb name"
 ---
 
 # /kb-research
