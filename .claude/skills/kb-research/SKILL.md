@@ -14,7 +14,7 @@ Agentic research loop. Given a topic, plan a research agenda, iteratively search
 Extract from $ARGUMENTS:
 - **Topic**: the research subject (required)
 - **--depth**: `shallow` | `medium` | `deep` (default: `medium`)
-- **--kb**: target KB name (default: `general`). Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
+- **--kb**: target KB name. If not specified, **infer the best KB** (see below). Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
 - **--checkpoint**: when to pause for user input (default: `plan+end`)
   - `plan` — pause after planning, then run autonomously until synthesis
   - `each` — pause after each sub-question to show findings and ask to continue/redirect
@@ -28,6 +28,18 @@ Extract from $ARGUMENTS:
 | `shallow` | 1 | One round of search per question, follow up on gaps once |
 | `medium` | 2 | Follow up on gaps twice per question |
 | `deep` | Until diminishing returns, max 10 | Keep researching until new searches add little value, hard cap at 10 rounds total across all questions |
+
+## KB Inference
+
+If `--kb` was not specified, infer the target KB before planning:
+
+1. Read `kbs.yaml` to get all non-private KBs with their descriptions.
+2. Run `python3 .kb/kb-index.py search "TOPIC" --kb <name>` for each non-private KB to see which has the most relevant existing notes.
+3. Also consider the KB descriptions — if the topic clearly fits a domain KB's description (e.g., "ZK proofs" fits a KB described as "Blockchain security, auditing, ZK systems"), prefer that KB.
+4. **Propose the KB** in the research plan: "Target KB: `blockchain-security` (strongest match: 12 related notes). Change? (or specify a different KB)"
+5. If no KB has relevant notes and the topic doesn't match any domain description, default to `general`.
+
+This inference happens once before Phase 1 and is confirmed by the user during the plan checkpoint.
 
 ## Phase 1: PLAN
 

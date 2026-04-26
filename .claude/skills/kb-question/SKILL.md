@@ -9,7 +9,11 @@ arguments: "The question to research and note down. Optional: --kb <name> to tar
 
 You are helping the user build their knowledge base. The user asked a question and you need to:
 
-**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, default to `general`. Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, infer the best KB:
+1. Search each non-private KB for related notes on this topic (`python3 .kb/kb-index.py search "TOPIC" --kb <name>`).
+2. If a domain KB has strong matches or its `kbs.yaml` description fits the topic, use that KB.
+3. If no clear match, default to `general`.
+4. State the chosen KB when presenting the answer — the user can redirect before saving.
 
 1. **Search existing notes** — Use Glob and Grep to check if `kbs/<kb_name>/` already has a note covering this topic. Also search other KBs for related content.
 2. **Research the answer** — Use your own knowledge and optionally WebSearch/WebFetch if the question benefits from current information or specific sources.

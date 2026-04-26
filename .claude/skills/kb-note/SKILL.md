@@ -9,7 +9,10 @@ arguments: "Optional filter or hint about what to extract (e.g. 'the discussion 
 
 You are helping the user capture knowledge from the current conversation into their knowledge base.
 
-**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, ask which KB to save to (default: `general`). Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, infer per-candidate:
+- For each candidate note, search existing KBs to find which has the most related content.
+- Group candidates by their best-fit KB. Present the grouping when showing candidates (e.g., "1. [concept] TCP Congestion Control → `general`").
+- The user can override KB assignment when selecting which notes to save.
 
 ## Steps
 

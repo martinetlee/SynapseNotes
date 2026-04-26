@@ -9,7 +9,11 @@ arguments: "Filename in references/, glob pattern, or URL to fetch. Optional: --
 
 Ingest source material and extract atomic knowledge base notes.
 
-**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, default to `general`. Verify the KB exists in `kbs.yaml`. Save notes to `kbs/<kb_name>/`.
+**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If not specified, infer the best KB:
+1. After reading the source, assess its topic. Search each non-private KB for related existing notes.
+2. If a domain KB has related content or its `kbs.yaml` description fits the source's topic, propose that KB.
+3. If no clear match, default to `general`.
+4. State the chosen KB when presenting candidates — the user can override.
 
 ## Steps
 
