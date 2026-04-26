@@ -27,7 +27,12 @@ Audit the knowledge base for quality issues and suggest improvements.
    - Run `python3 .kb/kb-index.py graph bridges [--kb <name>]` to identify critical connector notes.
 
    ### Synthesis Staleness
-   - Run `python3 .kb/kb-index.py stale-syntheses [--kb <name>]` to find synthesis notes whose dependencies have changed since the synthesis was generated. Suggest regenerating via `/kb-explain`.
+   - Run `python3 .kb/kb-index.py stale-syntheses [--kb name]` to find synthesis notes whose dependencies have changed since the synthesis was generated. Suggest regenerating via `/kb-explain`.
+
+   ### Research Gaps
+   - Run `python3 .kb/kb-index.py gaps research [--kb name]` to list all unresolved research gaps from research hub notes.
+   - Present gaps grouped by hub, with a count.
+   - Suggest: "Want to investigate any of these? Use `/kb-research <gap topic>`"
 
    ### Tag Sprawl
    - Find similar/redundant tags (e.g. `js` and `javascript`, `ml` and `machine-learning`)

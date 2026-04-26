@@ -171,7 +171,13 @@ After all questions are researched:
    - Summarizes the research topic and key findings
    - Lists all sources in `sources` frontmatter
    - Links to all created notes via `[[wikilinks]]`
-   - Notes any unresolved gaps
+   - **Record gaps in frontmatter** — add a `gaps:` list to the YAML frontmatter with each unresolved gap as a string. This makes gaps machine-readable and queryable via `python3 .kb/kb-index.py gaps research`. Example:
+     ```yaml
+     gaps:
+       - "Topic X: specific unanswered question"
+       - "Topic Y: needs deeper investigation"
+     ```
+   - Also list gaps in the body under a `## Research Gaps` section for human readability
 
 6. **Update taxonomy** — Add new tags to `.kb/taxonomy.yaml`.
 

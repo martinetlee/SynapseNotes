@@ -1374,6 +1374,65 @@ def find_topic_gaps(kb_name=None):
     return sorted(gaps, key=lambda x: len(x["issues"]), reverse=True)
 
 
+def find_research_gaps(kb_name=None):
+    """Aggregate unresolved research gaps from all research hub notes.
+
+    Reads the `gaps` frontmatter field from notes tagged `research-hub`.
+    Returns a list of {hub, title, gaps: [str]} dicts.
+    """
+    reg = get_registry()
+    if kb_name:
+        kbs_to_check = [resolve_kb(kb_name)]
+    else:
+        kbs_to_check = reg.all_kbs()
+
+    results = []
+    for kbc in kbs_to_check:
+        if not kbc.notes_dir.exists():
+            continue
+        for path in sorted(kbc.notes_dir.glob("*.md")):
+            fm, body, _ = parse_note(path)
+            tags = fm.get("tags", [])
+            if "research-hub" not in tags:
+                continue
+
+            # Check frontmatter gaps field first
+            fm_gaps = fm.get("gaps", [])
+            if fm_gaps:
+                results.append({
+                    "kb": kbc.name,
+                    "hub": path.stem,
+                    "title": fm.get("title", path.stem),
+                    "gaps": fm_gaps,
+                })
+                continue
+
+            # Fallback: parse "## Research Gaps" or "## Gaps" section from body
+            gap_lines = []
+            in_gaps = False
+            for line in body.split("\n"):
+                if line.strip().startswith("## ") and ("gap" in line.lower() or "unresolved" in line.lower()):
+                    in_gaps = True
+                    continue
+                elif line.strip().startswith("## ") and in_gaps:
+                    break
+                elif in_gaps and line.strip().startswith("- "):
+                    # Extract gap text, strip markdown bold/links
+                    gap_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', line.strip()[2:])
+                    gap_text = re.sub(r'\[\[([^\]]+)\]\]', r'\1', gap_text)
+                    gap_lines.append(gap_text.strip())
+
+            if gap_lines:
+                results.append({
+                    "kb": kbc.name,
+                    "hub": path.stem,
+                    "title": fm.get("title", path.stem),
+                    "gaps": gap_lines,
+                })
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Synthesis staleness
 # ---------------------------------------------------------------------------
@@ -2311,16 +2370,56 @@ if __name__ == "__main__":
                 print(f"       {s} ({meta.get('word_count', '?')} words)")
 
     elif cmd == "gaps":
-        gaps = find_topic_gaps(kb_name)
-        if not gaps:
-            print("No significant topic gaps found.")
+        subcmd = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else "topics"
+
+        if subcmd == "topics":
+            gaps = find_topic_gaps(kb_name)
+            if not gaps:
+                print("No significant topic gaps found.")
+            else:
+                print(f"Topic gaps ({len(gaps)}):\n")
+                for g in gaps:
+                    print(f"  {g['topic']} ({g['count']} notes)")
+                    for issue in g["issues"]:
+                        print(f"    - {issue}")
+                    print()
+
+        elif subcmd == "research":
+            rgaps = find_research_gaps(kb_name)
+            if not rgaps:
+                print("No unresolved research gaps found.")
+            else:
+                total = sum(len(r["gaps"]) for r in rgaps)
+                print(f"Unresolved research gaps ({total} across {len(rgaps)} hubs):\n")
+                for r in rgaps:
+                    print(f"  [{r['kb']}] {r['title']}:")
+                    for gap in r["gaps"]:
+                        print(f"    - {gap}")
+                    print()
+
+        elif subcmd == "all":
+            tgaps = find_topic_gaps(kb_name)
+            rgaps = find_research_gaps(kb_name)
+            if tgaps:
+                print(f"=== Topic gaps ({len(tgaps)}) ===\n")
+                for g in tgaps:
+                    print(f"  {g['topic']} ({g['count']} notes)")
+                    for issue in g["issues"]:
+                        print(f"    - {issue}")
+                    print()
+            if rgaps:
+                total = sum(len(r["gaps"]) for r in rgaps)
+                print(f"=== Research gaps ({total} across {len(rgaps)} hubs) ===\n")
+                for r in rgaps:
+                    print(f"  [{r['kb']}] {r['title']}:")
+                    for gap in r["gaps"]:
+                        print(f"    - {gap}")
+                    print()
+            if not tgaps and not rgaps:
+                print("No gaps found.")
+
         else:
-            print(f"Topic gaps ({len(gaps)}):\n")
-            for g in gaps:
-                print(f"  {g['topic']} ({g['count']} notes)")
-                for issue in g["issues"]:
-                    print(f"    - {issue}")
-                print()
+            print("Usage: kb-index.py gaps [topics|research|all] [--kb name]")
 
     elif cmd == "eval":
         subcmd = sys.argv[2] if len(sys.argv) > 2 else "retrieval"
