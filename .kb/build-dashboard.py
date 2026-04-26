@@ -412,9 +412,11 @@ def build_link_graph_html(graph_data, metadata, topic_data, cluster_colors):
     .style('font-size', '12px').style('opacity', 0).style('z-index', 10);
 
   var sim = d3.forceSimulation(data.nodes)
-    .force('link', d3.forceLink(data.edges).id(function(d){{ return d.id; }}).distance(60))
-    .force('charge', d3.forceManyBody().strength(-80))
+    .force('link', d3.forceLink(data.edges).id(function(d){{ return d.id; }}).distance(50))
+    .force('charge', d3.forceManyBody().strength(-50))
     .force('center', d3.forceCenter(width/2, height/2))
+    .force('x', d3.forceX(width/2).strength(0.07))
+    .force('y', d3.forceY(height/2).strength(0.07))
     .force('collide', d3.forceCollide().radius(function(d){{ return Math.sqrt(d.degree)*2+6; }}));
 
   var link = g.append('g').selectAll('line')
