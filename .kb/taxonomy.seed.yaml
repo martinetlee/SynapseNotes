@@ -1,0 +1,21 @@
+# Tag Registry Seed — copy to taxonomy.yaml to get started.
+# Claude adds new tags freely. /kb-review flags sprawl and suggests consolidation.
+# Format: tag-name: "short description"
+tags:
+  ai: "Artificial intelligence concepts and practices"
+  agents: "AI agent architectures and patterns"
+  architecture: "System architecture and structural patterns"
+  benchmarks: "Performance evaluation benchmarks"
+  compliance: "Security compliance frameworks and certifications"
+  evaluation: "AI system evaluation methodology and frameworks"
+  frameworks: "Software frameworks and platforms"
+  llm: "Large language model concepts and usage"
+  meta: "Notes about the KB system itself"
+  production: "Production deployment considerations"
+  rag: "Retrieval-augmented generation systems"
+  research-hub: "Hub notes linking research on a topic"
+  retrieval: "Information retrieval patterns and algorithms"
+  security: "Security concepts and practices"
+  software-design: "Software architecture and design patterns"
+  testing: "Software testing and quality assurance"
+  tradeoffs: "Engineering and design tradeoffs"
