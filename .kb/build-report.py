@@ -180,6 +180,29 @@ def resolve_wikilinks_and_citations(html, footnotes, resolve_fn, context_kb=None
 
 def md_to_html(md_text, footnotes, resolve_fn, context_kb=None):
     """Convert markdown body to HTML using python-markdown, then resolve wikilinks/citations."""
+    # Extract mermaid blocks before markdown processing (codehilite mangles them)
+    mermaid_blocks = []
+    mermaid_placeholder = "MERMAID_PLACEHOLDER_{}"
+    in_mermaid = False
+    mermaid_buf = []
+    cleaned_lines = []
+    for line in md_text.split("\n"):
+        if line.strip() == "```mermaid":
+            in_mermaid = True
+            mermaid_buf = []
+            continue
+        elif in_mermaid and line.strip() == "```":
+            in_mermaid = False
+            idx = len(mermaid_blocks)
+            mermaid_blocks.append("\n".join(mermaid_buf))
+            cleaned_lines.append(mermaid_placeholder.format(idx))
+            continue
+        elif in_mermaid:
+            mermaid_buf.append(line)
+            continue
+        cleaned_lines.append(line)
+    md_text = "\n".join(cleaned_lines)
+
     # python-markdown handles headings, tables, lists, code, blockquotes, bold, italic, etc.
     md = markdown.Markdown(extensions=[
         'tables',
@@ -206,6 +229,13 @@ def md_to_html(md_text, footnotes, resolve_fn, context_kb=None):
 
     html = md.convert("\n".join(shifted))
     html = resolve_wikilinks_and_citations(html, footnotes, resolve_fn, context_kb)
+
+    # Re-insert mermaid blocks as <pre class="mermaid"> (rendered by mermaid-js in the template)
+    for idx, mermaid_src in enumerate(mermaid_blocks):
+        placeholder = f"<p>{mermaid_placeholder.format(idx)}</p>"
+        replacement = f'<pre class="mermaid">{mermaid_src}</pre>'
+        html = html.replace(placeholder, replacement)
+
     return html
 
 
