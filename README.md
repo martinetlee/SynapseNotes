@@ -25,9 +25,9 @@ SynapseNotes is the machinery for building, querying, and maintaining a personal
                 │          │          │
      ┌──────────▼──┐  ┌───▼────┐  ┌──▼──────────┐
      │ kbs/general │  │ kbs/   │  │ kbs/        │
-     │ 238 notes   │  │personal│  │ blockchain- │
-     │             │  │ private│  │ security    │
-     │             │  │        │  │ 114 notes   │
+     │             │  │personal│  │ <your-      │
+     │             │  │ private│  │  domain>    │
+     │             │  │        │  │             │
      └─────────────┘  └────────┘  └─────────────┘
                 │          │          │
      ┌──────────▼──────────▼──────────▼───────────┐
@@ -62,12 +62,11 @@ You ask a question or research a topic
 Notes are organized into multiple knowledge bases with different purposes and access levels:
 
 ```
-kbs.yaml                    ← Registry declaring all KBs
+kbs.yaml                    ← Registry declaring all KBs (per-user, gitignored)
 kbs/
   general/                  ← Default KB (cross-cutting concepts, tools)
   personal/                 ← Private notes (gitignored, excluded from MCP)
-  blockchain-security/      ← Domain KB (can be shared independently)
-  <your-domain>/            ← Add more with /kb-init
+  <your-domain>/            ← Add domain KBs with /kb-init
 ```
 
 ### Smart KB Routing
@@ -75,7 +74,7 @@ kbs/
 The system automatically routes queries and notes to the right KB:
 
 ```
-                    "reentrancy exploit"
+                  "domain-specific query"
                           │
                    ┌──────▼──────┐
                    │  KB Router  │
@@ -88,15 +87,15 @@ The system automatically routes queries and notes to the right KB:
           in one KB   │       │
                       ▼       ▼
             ┌─────────────┐ ┌──────────┐
-            │ blockchain- │ │ Unified  │
-            │ security    │ │ Index    │
+            │ matched     │ │ Unified  │
+            │ KB          │ │ Index    │
             │ (scoped)    │ │ (all KBs)│
             └─────────────┘ └──────────┘
 ```
 
 - **Writes** (`/kb-research`, `/kb-question`): infer KB from topic → propose → user confirms
 - **Reads** (`/kb-search`, `/kb-explain`): infer KB from query → auto-route or fall back to unified
-- **Explicit** (`--kb blockchain-security`): always overrides to specified KB
+- **Explicit** (`--kb <name>`): always overrides to specified KB
 
 ## Knowledge Quality Tracking
 
@@ -109,15 +108,15 @@ Every note tracks how confident we are in its claims:
 
   verified ──── likely ──── speculative ──── disputed ──── opinion
      │            │              │               │            │
-  On-chain    Security       Informed       Conflicting   Author's
-  data,       firm           inference,     claims        judgment,
-  audit       analyses,      may change     exist         not
-  reports     Rekt News                                   falsifiable
+  Primary     Credible        Informed       Conflicting   Author's
+  sources,    secondary       inference,     credible      judgment,
+  raw data,   analyses        may change     claims        not
+  papers                                     exist         falsifiable
 ```
 
 When synthesizing across notes, the system surfaces confidence:
-- "Based on verified on-chain data: X"
-- "According to Prestwich's analysis [opinion]: Y"
+- "Based on verified primary sources: X"
+- "According to [author]'s analysis [opinion]: Y"
 
 ### Source Classification
 
@@ -125,15 +124,15 @@ Reference files are classified by reliability:
 
 | Source Type | Examples | Weight |
 |---|---|---|
-| **primary** | On-chain data, audit reports, official post-mortems, academic papers | Highest |
-| **secondary** | Security firm blogs, Rekt News, Chainalysis reports | High |
+| **primary** | Original data, official post-mortems, academic papers, protocol/product docs | Highest |
+| **secondary** | Analyses based on primary sources, firm reports, reputable journalism | High |
 | **opinion** | Tweets, blog opinions, community commentary | Medium |
 | **unverified** | News articles, aggregator summaries | Lowest |
 
 ## Search & Retrieval
 
 ```
-         User Query: "How do oracle attacks work?"
+         User Query: "How does X work?"
                         │
               ┌─────────▼─────────┐
               │   KB Router       │
@@ -188,30 +187,30 @@ The KB doesn't just store notes — it actively analyzes its own quality:
 
 ### Pattern Detection
 ```bash
-$ python3 .kb/kb-index.py patterns --kb blockchain-security
+$ python3 .kb/kb-index.py patterns --kb my-domain
 
-Detected patterns (10):
-  social-engineering (10 notes, NO synthesis note) → $2.4B total
-  key-compromise (5 notes, NO synthesis note) → $2.8B total
-  oracle-manipulation (8 notes, HAS synthesis) ✓
-  bridge-security (15 notes, HAS synthesis) ✓
+Detected patterns (4):
+  pattern-a (10 notes, NO synthesis note)
+  pattern-b (5 notes, NO synthesis note)
+  pattern-c (8 notes, HAS synthesis) ✓
+  pattern-d (15 notes, HAS synthesis) ✓
 ```
 
 ### Contradiction Scanning
 ```bash
-$ python3 .kb/kb-index.py contradictions-scan --kb blockchain-security
+$ python3 .kb/kb-index.py contradictions-scan --kb my-domain
 
 Potential contradictions:
-  Euler: $240M in euler-exploit vs $197M in largest-defi-exploits
-  → pre-recovery vs post-recovery amount
+  Topic X: value $A in note-1 vs $B in note-2
+  → reconcile or note context difference
 ```
 
 ### Gap Suggestions
 ```bash
-$ python3 .kb/kb-index.py gaps suggestions --kb blockchain-security
+$ python3 .kb/kb-index.py gaps suggestions --kb my-domain
 
-1. [HIGH] Synthesize "key-compromise" pattern (5 incidents, $2.8B)
-2. [HIGH] Synthesize "social-engineering" pattern (10 incidents, $2.4B)
+1. [HIGH] Synthesize "pattern-a" cluster (5 notes)
+2. [HIGH] Synthesize "pattern-b" cluster (10 notes)
 3. [MEDIUM] Add insights to cluster with 0 insight notes
 ```
 
@@ -219,9 +218,9 @@ $ python3 .kb/kb-index.py gaps suggestions --kb blockchain-security
 ```bash
 $ python3 .kb/kb-index.py gaps research
 
-Unresolved research gaps (66 across 10 hubs):
-  Research Hub: DeFi Exploits — 6 gaps
-  Research Hub: RAG Evaluation — 4 gaps
+Unresolved research gaps (n across m hubs):
+  Research Hub: Topic A — 6 gaps
+  Research Hub: Topic B — 4 gaps
 ```
 
 ## Skills
@@ -279,24 +278,24 @@ Body with [[wikilinks]] and inline citations
 - Bullet points for quick scanning
 ```
 
-### Exploit Note Template
+### Domain-Specific Templates
 
-For blockchain security exploit notes, a richer template is used:
+You can extend the base note format with richer templates for specific domains. For example, an incident/post-mortem note in any domain might use sections like:
 
 ```
-## Incident Summary
-## Artifacts        ← attacker address, tx hash, contract, block
-## Attack Flow      ← indented call trace
-## Vulnerable Code  ← pseudocode of the bug
+## Summary
+## Artifacts        ← identifiers, links, evidence
+## Sequence of Events
 ## Root Cause
 ## The Fix
-## Audit History    ← table of auditors, scope, findings
-## Fund Flow        ← extraction → laundering → current status
-## Classification   ← attack category, SWC ID, on/off-chain
-## Similar Exploits ← cross-links to related incidents
-## Reproduction     ← DeFiHackLabs PoC, Foundry fork command
+## Review History   ← prior audits / reviews and what they found
+## Classification   ← category, severity, taxonomy IDs
+## Similar Cases    ← cross-links to related notes
+## Reproduction     ← how to verify or reproduce
 ## Key Takeaways
 ```
+
+Add your own templates per KB as needed.
 
 ## Citation Chain
 
@@ -413,6 +412,8 @@ git clone <repo-url> && cd SynapseNotes
 pip3 install pyyaml scikit-learn numpy markdown
 
 # Initialize
+cp kbs.example.yaml kbs.yaml
+cp tests/eval_data.example.json tests/eval_data.json
 cp .kb/taxonomy.seed.yaml .kb/taxonomy.yaml
 mkdir -p kbs/general kbs/personal
 python3 .kb/kb-index.py build
@@ -421,9 +422,9 @@ python3 .kb/kb-index.py build
 cd .kb && uv sync && cd ..
 
 # Start using
-# /kb-init blockchain-security
-# /kb-research "ZK rollup security" --depth deep
-# /kb-search "oracle manipulation attacks"
+# /kb-init my-domain
+# /kb-research "topic of interest" --depth deep
+# /kb-search "your query"
 ```
 
 ## Design Principles
@@ -440,16 +441,17 @@ cd .kb && uv sync && cd ..
 ## Git Strategy
 
 ```
-Tracked (machinery):          Gitignored (content):
-  .kb/kb-index.py               kbs/*/
-  .kb/build-report.py           references/
-  .kb/build-dashboard.py        publish/
-  .kb/mcp_server.py             .kb/taxonomy.yaml
-  .kb/config.yaml               .kb/log.md
-  .kb/pyproject.toml             .kb/index/
-  .claude/skills/               tests/*_results.json
-  tests/*.py
-  kbs.yaml
+Tracked (machinery):          Gitignored (per-user / content):
+  .kb/kb-index.py               kbs.yaml
+  .kb/build-report.py           kbs/*/
+  .kb/build-dashboard.py        references/
+  .kb/mcp_server.py             publish/
+  .kb/config.yaml               .kb/taxonomy.yaml
+  .kb/pyproject.toml            .kb/log.md
+  .claude/skills/               .kb/index/
+  tests/*.py                    tests/eval_data.json
+  kbs.example.yaml              tests/*_results.json
+  tests/eval_data.example.json
   CLAUDE.md
 ```
 

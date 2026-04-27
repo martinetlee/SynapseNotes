@@ -1,15 +1,15 @@
 # Knowledge Base System
 
-A Claude-powered multi-KB knowledge base using Obsidian-compatible markdown notes.
+An AI-agent-powered multi-KB knowledge base using Obsidian-compatible markdown notes. Designed for use with Claude Code, Codex, Cursor, and other agentic CLIs (this file is also exposed as `AGENTS.md` via symlink).
 
 ## Project Structure
 
 ```
-kbs.yaml             — KB registry (declares all KBs and their properties)
+kbs.yaml             — KB registry (declares all KBs and their properties; per-user, gitignored — copy from kbs.example.yaml)
 kbs/
   general/           — Default KB for cross-cutting concepts
   personal/          — Private notes (gitignored)
-  blockchain-security/  — Domain KB
+  <your-domain>/     — Add domain KBs as needed
 references/          — Source material for ingestion (READ-ONLY — shared across all KBs)
 publish/             — Generated HTML reports for sharing
 .kb/config.yaml      — KB settings and all tunable thresholds
@@ -17,12 +17,12 @@ publish/             — Generated HTML reports for sharing
 .kb/index/
   general/           — Per-KB search index
   personal/
-  blockchain-security/
+  <your-domain>/
   _unified/          — Merged cross-KB index
 .kb/kb-index.py      — Search index, linter, link graph, and query engine
 .kb/build-report.py  — HTML report builder (uses python-markdown)
 .kb/mcp_server.py    — Read-only MCP server for external tools
-.claude/skills/      — Claude Code skill definitions
+.claude/skills/      — Agent skill definitions (also exposed at .agents/skills/ via symlink)
 tests/               — Retrieval and generation eval harness
 ```
 
@@ -38,8 +38,8 @@ kbs:
   personal:
     path: kbs/personal
     private: true           # gitignored, excluded from MCP and default search
-  blockchain-security:
-    path: kbs/blockchain-security
+  my-domain:
+    path: kbs/my-domain
 ```
 
 **Key rules:**
@@ -51,7 +51,7 @@ kbs:
 
 ## Read-Only Directories
 
-**`references/`** — Shared across all KBs. Contains structured summaries of source material (papers, articles, docs). Each file has the external URL at the top (`Source: https://...`) and a summary of key content. Claude may **write new files** here, but must **never edit or delete existing files**. Notes cite these local files rather than external URLs directly.
+**`references/`** — Shared across all KBs. Contains structured summaries of source material (papers, articles, docs). Each file has the external URL at the top (`Source: https://...`) and a summary of key content. The agent may **write new files** here, but must **never edit or delete existing files**. Notes cite these local files rather than external URLs directly.
 
 Reference files should include a `source_type` classification:
 ```markdown
@@ -65,8 +65,8 @@ Source-Type: primary | secondary | opinion | unverified
 ```
 
 Source types:
-- **primary** — on-chain data, audit reports, official post-mortems, academic papers, protocol documentation
-- **secondary** — security firm blog posts, Rekt News write-ups, Chainalysis/Halborn reports
+- **primary** — original data, official post-mortems, academic papers, protocol/product documentation, raw measurements
+- **secondary** — analyses or write-ups based on primary sources (firm reports, technical breakdowns, reputable journalism)
 - **opinion** — tweets, blog opinion pieces, community commentary
 - **unverified** — news articles, aggregator summaries, AI-generated content
 
@@ -96,13 +96,13 @@ related: []
 ```
 
 **Epistemic status**: How confident are we in this note's claims?
-- **verified** — backed by on-chain data, audit reports, or other primary sources. Independently confirmable.
-- **likely** — backed by credible secondary sources (security firm analyses, Rekt News). Consistent with evidence but not independently verified.
+- **verified** — backed by primary sources. Independently confirmable.
+- **likely** — backed by credible secondary sources. Consistent with evidence but not independently verified.
 - **speculative** — informed inference or extrapolation. May be wrong as new information emerges.
-- **disputed** — conflicting claims exist (e.g., KelpDAO vs LayerZero blame dispute). Note presents both sides.
-- **opinion** — the author's judgment or interpretation (e.g., "this is a design failure"). Not falsifiable.
+- **disputed** — conflicting claims exist between credible sources. Note presents both sides.
+- **opinion** — the author's judgment or interpretation. Not falsifiable.
 
-When synthesizing across notes, `/kb-search` and `/kb-explain` should surface epistemic status: "Based on verified on-chain data: X. Based on Prestwich's analysis [opinion]: Y."
+When synthesizing across notes, `/kb-search` and `/kb-explain` should surface epistemic status: "Based on verified primary sources: X. Based on [author]'s analysis [opinion]: Y."
 
 **Temporal validity**: Notes can become outdated. `valid_from`/`valid_until` track when information was true. `deprecated_by` points to the superseding note. Default retrieval returns only currently-valid entries. `/kb-review` flags notes past their expected freshness window.
 
@@ -168,7 +168,7 @@ All commands via `python3 .kb/kb-index.py <command> [--kb <name>]`:
 
 ## MCP Server
 
-The KB exposes a read-only MCP server for external tools (Claude Code from other projects, Cursor, etc.).
+The KB exposes a read-only MCP server for external tools (Claude Code, Codex, Cursor, etc.).
 
 **Start:** `uv run --directory .kb python mcp_server.py`
 
@@ -182,7 +182,7 @@ All MCP tools accept an optional `kb` parameter to scope to a specific KB. Priva
   "mcpServers": {
     "knowledge-base": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/martinetlee/Project/Personal/KnowledgeBase/.kb", "python", "mcp_server.py"],
+      "args": ["run", "--directory", "/path/to/KnowledgeBase/.kb", "python", "mcp_server.py"],
       "env": {}
     }
   }
@@ -195,7 +195,7 @@ The server auto-rebuilds the index if notes have changed since the last build (c
 
 `.kb/config.yaml` contains all tunable thresholds for search, coverage, similarity, clustering, staleness, and indexing. Skills read from this config — do not hard-code thresholds in skill prompts or scripts.
 
-`kbs.yaml` at the project root declares all KBs. To add a new KB: add an entry to `kbs.yaml` and create the directory.
+`kbs.yaml` at the project root declares all KBs. It is per-user and gitignored — copy `kbs.example.yaml` to `kbs.yaml` to bootstrap. To add a new KB: add an entry to `kbs.yaml` and create the directory.
 
 ## Backup
 
@@ -203,4 +203,4 @@ Run `.kb/backup.sh` to back up all KBs and references to `~/.kb-backups/`. Keeps
 
 ## KB Role
 
-The KB is **supplementary** — Claude uses its own knowledge combined with KB content. When the user asks to answer "from KB only", restrict to KB content.
+The KB is **supplementary** — the agent uses its own knowledge combined with KB content. When the user asks to answer "from KB only", restrict to KB content.

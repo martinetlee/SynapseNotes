@@ -35,8 +35,8 @@ If `--kb` was not specified, infer the target KB before planning:
 
 1. Read `kbs.yaml` to get all non-private KBs with their descriptions.
 2. Run `python3 .kb/kb-index.py search "TOPIC" --kb <name>` for each non-private KB to see which has the most relevant existing notes.
-3. Also consider the KB descriptions — if the topic clearly fits a domain KB's description (e.g., "ZK proofs" fits a KB described as "Blockchain security, auditing, ZK systems"), prefer that KB.
-4. **Propose the KB** in the research plan: "Target KB: `blockchain-security` (strongest match: 12 related notes). Change? (or specify a different KB)"
+3. Also consider the KB descriptions — if the topic clearly fits a domain KB's description, prefer that KB.
+4. **Propose the KB** in the research plan: "Target KB: `<kb-name>` (strongest match: N related notes). Change? (or specify a different KB)"
 5. If no KB has relevant notes and the topic doesn't match any domain description, default to `general`.
 
 This inference happens once before Phase 1 and is confirmed by the user during the plan checkpoint.
@@ -95,8 +95,8 @@ For each research question, run the research loop:
    (structured summary of findings)
    ```
    Classify each source:
-   - **primary**: on-chain data, audit reports, official post-mortems, academic papers, protocol docs
-   - **secondary**: security firm blog posts, Rekt News, Chainalysis/Halborn reports
+   - **primary**: original data, official post-mortems, academic papers, protocol/product documentation
+   - **secondary**: analyses based on primary sources (firm reports, technical breakdowns, reputable journalism)
    - **opinion**: tweets, blog opinion pieces, community commentary
    - **unverified**: news articles, aggregator summaries
 
@@ -169,8 +169,8 @@ After all questions are researched:
    a. **Contradiction check**: Run `python3 .kb/kb-index.py search "NOTE_TITLE" --kb <kb_name>` to find similar existing notes. If score > 0.3, read those notes and check for conflicting claims. If contradictions found, ask user: reconcile, update existing, or create separate with link?
    b. **Dedup check**: If similar note score > 0.5, it likely covers the same concept — suggest updating the existing note instead of creating a duplicate.
    c. Create/update following CLAUDE.md format. **Assign `epistemic_status`** based on source quality:
-      - `verified` if backed by primary sources (on-chain data, audit reports, official post-mortems)
-      - `likely` if backed by credible secondary sources (security firm analyses, Rekt News)
+      - `verified` if backed by primary sources (original data, official post-mortems, academic papers)
+      - `likely` if backed by credible secondary sources
       - `speculative` if based on inference or extrapolation
       - `disputed` if conflicting claims exist
       - `opinion` if the note contains the author's judgment

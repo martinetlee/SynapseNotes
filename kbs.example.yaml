@@ -1,0 +1,29 @@
+# Knowledge Base Registry (example)
+# Copy this file to kbs.yaml and customize for your KBs.
+# kb-index.py, mcp_server.py, and skills read kbs.yaml to discover KBs.
+
+kbs:
+  general:
+    path: kbs/general
+    default: true
+    description: "General knowledge base — cross-cutting concepts, tools, frameworks"
+
+  personal:
+    path: kbs/personal
+    private: true
+    description: "Private notes — career, people, decisions (gitignored)"
+
+  # Add your own domain KBs below. Examples:
+  #
+  # my-domain:
+  #   path: kbs/my-domain
+  #   description: "Your domain-specific KB"
+  #
+  # research:
+  #   path: kbs/research
+  #   private: true
+  #   description: "Private research notes"
+
+# Shared across all KBs
+taxonomy: shared        # single .kb/taxonomy.yaml
+references: shared      # single references/ pool

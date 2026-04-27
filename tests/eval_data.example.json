@@ -1,0 +1,29 @@
+{
+  "_comment": "Golden query set for KB retrieval evaluation. Copy to tests/eval_data.json and replace with queries grounded in your own notes. Each entry has a query, reformulations (for multi-query testing), and expected relevant notes (graded 0-2: 2 = highly relevant, 1 = related). Aim for 50+ queries for stable Recall@5 / MRR / nDCG@5 metrics.",
+  "queries": [
+    {
+      "id": "q01",
+      "query": "How does TF-IDF compare to BM25 for small corpora?",
+      "reformulations": [
+        "bm25 vs tf-idf retrieval at small scale",
+        "sparse retrieval algorithms compared"
+      ],
+      "relevant": {
+        "example-note-slug-a": 2,
+        "example-note-slug-b": 1
+      }
+    },
+    {
+      "id": "q02",
+      "query": "What chunk size works best for RAG?",
+      "reformulations": [
+        "optimal chunk size token length retrieval",
+        "chunking strategy comparison rag"
+      ],
+      "relevant": {
+        "example-chunking-note": 2,
+        "example-rag-overview": 1
+      }
+    }
+  ]
+}

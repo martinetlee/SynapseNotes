@@ -1622,8 +1622,8 @@ def _extract_amounts(text):
 def _extract_entity_from_title(title):
     """Extract a likely entity/protocol name from a note title.
 
-    E.g., 'Ronin Exploit ($624M)' -> 'ronin'
-          'Bybit Exploit 1.4B' -> 'bybit'
+    E.g., 'Foo Incident ($10M)' -> 'foo'
+          'Bar Hack 1.5B' -> 'bar'
     """
     # Remove common suffixes
     cleaned = re.sub(r'\s*\(.*?\)', '', title)

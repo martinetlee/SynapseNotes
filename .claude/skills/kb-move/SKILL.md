@@ -2,7 +2,7 @@
 name: kb-move
 description: Move notes between knowledge bases, updating all links and references
 user_invocable: true
-arguments: "Note slug(s) to move, and target KB. E.g.: 'pig-butchering-compound-infrastructure --to blockchain-security' or 'scam-* --to scam-detection'"
+arguments: "Note slug(s) to move, and target KB. E.g.: 'some-note-slug --to my-domain' or 'topic-* --to my-domain'"
 ---
 
 # /kb-move
@@ -12,7 +12,7 @@ Move one or more notes from one KB to another, updating all cross-references.
 ## Steps
 
 1. **Parse arguments** — Extract from $ARGUMENTS:
-   - **Slugs**: one or more note slugs, or a glob pattern (e.g., `pig-butchering-*`)
+   - **Slugs**: one or more note slugs, or a glob pattern (e.g., `topic-*`)
    - **--to**: target KB name (required)
    - **--from**: source KB name (optional — if omitted, search all KBs for each slug)
 
@@ -25,16 +25,16 @@ Move one or more notes from one KB to another, updating all cross-references.
 
 3. **Show migration plan** — Present what will happen:
    ```
-   Moving 5 notes from general → blockchain-security:
+   Moving 5 notes from general → my-domain:
 
-   1. pig-butchering-compound-infrastructure
-   2. why-pig-butchering-detection-hard
-   3. fincen-pig-butchering-typology
-   4. pig-butchering-detection-challenges
-   5. platform-side-pig-butchering-detection
+   1. note-slug-one
+   2. note-slug-two
+   3. note-slug-three
+   4. note-slug-four
+   5. note-slug-five
 
    This will:
-   - Move files from kbs/general/ to kbs/blockchain-security/
+   - Move files from kbs/general/ to kbs/my-domain/
    - Update wikilinks in OTHER notes that reference these (add cross-KB prefix if needed)
    - No reference path changes needed (both KBs are at same depth under kbs/)
 

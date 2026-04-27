@@ -7,6 +7,12 @@ references/*
 publish/*
 !publish/.gitkeep
 
+# Per-user config — copy from kbs.example.yaml to bootstrap
+kbs.yaml
+
+# Per-user eval queries — copy from tests/eval_data.example.json to bootstrap
+tests/eval_data.json
+
 # Index and runtime data
 .kb/index/
 .kb/log.md
