@@ -9,7 +9,11 @@ arguments: "The topic to explain. Optional: --kb name to scope to a specific KB"
 
 Synthesize everything the KB knows about a topic into a coherent, structured narrative.
 
-**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, search only that KB. If not specified, search all non-private KBs (unified index). Pass `--kb <name>` to `kb-index.py` commands when scoping to a single KB.
+**KB routing**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, search only that KB. If not specified, **infer the best KB from the topic**:
+1. Run `python3 .kb/kb-index.py quick "TOPIC" --kb <name>` for each non-private KB.
+2. If one KB has significantly stronger matches, scope to that KB. Mention which KB was selected.
+3. If no clear winner or topic spans multiple domains, search unified index.
+4. User can always override with `--kb <name>`.
 
 ## Steps
 

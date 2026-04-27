@@ -9,12 +9,19 @@ arguments: "The search query. Optional: --kb name"
 
 Search the knowledge base for notes relevant to the user's query and synthesize a grounded answer.
 
-**KB selection**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, search only that KB. If not specified, search all non-private KBs (unified index). Pass `--kb <name>` to `kb-index.py` commands when scoping to a single KB.
+**KB routing**: Parse $ARGUMENTS for `--kb <name>` flag. If specified, search only that KB. If not specified, **infer the best KB from the query**:
+
+1. Read `kbs.yaml` to get all non-private KBs with their descriptions.
+2. Run `python3 .kb/kb-index.py quick "QUERY" --kb <name>` for each non-private KB to see which has the strongest match.
+3. Also consider KB descriptions — if the query clearly fits a domain KB (e.g., "reentrancy exploit" fits "Blockchain security, auditing, ZK systems"), prefer that KB.
+4. **If one KB has significantly stronger matches** (top result score 2x+ higher than other KBs): search that KB only. Mention which KB was selected in the response.
+5. **If no clear winner or query is cross-domain**: search unified index (all non-private KBs).
+6. The user can always override with `--kb <name>`.
 
 ## Steps
 
 1. **Assess query complexity** — Decide the retrieval tier:
-   - **Quick lookup** (query is a specific term, name, or concept): Run `python3 .kb/kb-index.py quick "QUERY" [--kb <name>]` first. If it returns a clear match (score > 3.0), read that note and answer directly — skip full search.
+   - **Quick lookup** (query is a specific term, name, or concept): Run `python3 .kb/kb-index.py quick "QUERY"` against the selected KB. If it returns a clear match (score > 3.0), read that note and answer directly — skip full search.
    - **Full search** (query needs synthesis across multiple notes): proceed to step 2.
 
 2. **Multi-query search** — Generate 2-3 alternative phrasings of the user's query to overcome vocabulary mismatch. The original query may use different words than the notes.
