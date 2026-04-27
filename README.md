@@ -341,7 +341,7 @@ All via `python3 .kb/kb-index.py <command> [--kb <name>]`:
 | Command | Purpose |
 |---|---|
 | `lint [slug]` | Validate frontmatter, wikilinks, citations, tags |
-| `patterns` | Detect recurring attack/topic patterns, flag unsynthesized ones |
+| `patterns` | Detect recurring topic patterns, flag unsynthesized ones |
 | `contradictions-scan` | Find conflicting amounts, dates, classifications |
 | `gaps [topics\|research\|suggestions\|all]` | Topic gaps, research gaps, ranked suggestions |
 
