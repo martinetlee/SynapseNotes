@@ -36,6 +36,7 @@ Usage:
   python3 .kb/kb-index.py explore <slug> [steps]     # Suggested reading path from a note
   python3 .kb/kb-index.py gaps                       # Find thin/weak topic areas
   python3 .kb/kb-index.py gaps suggestions           # Ranked research & synthesis suggestions
+  python3 .kb/kb-index.py atlas-report "topic"       # Publish enriched topic atlas HTML
   python3 .kb/kb-index.py patterns                   # Detect recurring patterns (e.g. exploit types)
   python3 .kb/kb-index.py contradictions-scan        # Scan for contradictory facts across notes
   python3 .kb/kb-index.py eval                       # Run retrieval evaluation
@@ -2823,6 +2824,59 @@ if __name__ == "__main__":
                 print(f"    density: {data['link_density']:.1%} {density_bar}")
                 print(f"    tags: {', '.join(data['tags'][:5])}")
                 print()
+
+    elif cmd == "atlas-report":
+        if len(sys.argv) < 3:
+            print("Usage: kb-index.py atlas-report 'topic' [--kb name] [--limit N] [--core-limit N] [--depth N] [--no-adjacent] [--title 'Title']")
+            sys.exit(1)
+
+        import importlib.util
+
+        topic = sys.argv[2]
+        limit = 80
+        core_limit = 24
+        depth = 1
+        include_adjacent = True
+        custom_title = None
+
+        i = 3
+        while i < len(sys.argv):
+            arg = sys.argv[i]
+            if arg == "--limit" and i + 1 < len(sys.argv):
+                limit = int(sys.argv[i + 1])
+                i += 2
+            elif arg == "--core-limit" and i + 1 < len(sys.argv):
+                core_limit = int(sys.argv[i + 1])
+                i += 2
+            elif arg == "--depth" and i + 1 < len(sys.argv):
+                depth = int(sys.argv[i + 1])
+                i += 2
+            elif arg == "--no-adjacent":
+                include_adjacent = False
+                i += 1
+            elif arg == "--title" and i + 1 < len(sys.argv):
+                custom_title = sys.argv[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        atlas_path = BASE / ".kb" / "build-atlas-report.py"
+        spec = importlib.util.spec_from_file_location("kb_atlas_report", atlas_path)
+        if spec is None or spec.loader is None:
+            print(f"Could not load atlas report builder: {atlas_path}", file=sys.stderr)
+            sys.exit(1)
+        atlas = importlib.util.module_from_spec(spec)
+        sys.modules["kb_atlas_report"] = atlas
+        spec.loader.exec_module(atlas)
+        atlas.build_atlas_report(
+            topic=topic,
+            kb_name=kb_name,
+            limit=max(1, limit),
+            core_limit=max(1, core_limit),
+            depth=max(0, depth),
+            include_adjacent=include_adjacent,
+            custom_title=custom_title,
+        )
 
     elif cmd == "explore":
         if len(sys.argv) < 3:
