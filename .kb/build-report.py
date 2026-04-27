@@ -47,7 +47,8 @@ def find_note(slug):
     """Find a note file across all KBs. Returns the Path or None.
 
     Handles cross-KB syntax 'kb:slug' by searching the named KB first.
-    If no prefix, searches all KBs (first match wins — prints warning if ambiguous).
+    If no prefix and slug is unambiguous (exists in exactly one KB), returns it.
+    If ambiguous (multiple KBs), prints error and returns None — caller must qualify.
     """
     target_kb = None
     bare_slug = slug
@@ -63,7 +64,8 @@ def find_note(slug):
                 candidate = kb_dir / f"{bare_slug}.md"
                 if candidate.exists():
                     return candidate
-        # Fall through to search all if named KB not found
+        # Explicit KB specified but not found — fail, don't fall through
+        return None
 
     # Search all KBs, track matches for ambiguity detection
     matches = []
@@ -73,7 +75,10 @@ def find_note(slug):
             matches.append(candidate)
 
     if len(matches) > 1:
-        print(f"Warning: slug '{bare_slug}' found in {len(matches)} KBs: {[m.parent.name for m in matches]}. Using first match.", file=sys.stderr)
+        kb_names = [m.parent.name for m in matches]
+        print(f"Error: slug '{bare_slug}' found in {len(matches)} KBs: {kb_names}. "
+              f"Qualify with kb:slug, e.g. '{kb_names[0]}:{bare_slug}'", file=sys.stderr)
+        return None
 
     return matches[0] if matches else None
 
@@ -266,18 +271,24 @@ def build_report(slug, custom_title=None):
         return bare_slug, qid
 
     def _resolve_wikilink_slug(raw_slug, context_kb=None):
-        """Resolve a wikilink slug to a qualified ID, preferring the context KB."""
+        """Resolve a wikilink slug to a qualified ID, preferring the context KB.
+
+        Fail-closed: explicit [[kb:slug]] that doesn't match returns None
+        immediately — never falls through to a different KB's note.
+        """
+        is_explicit = ":" in raw_slug and not raw_slug.startswith("http")
         bare = _strip_kb_prefix(raw_slug)
-        # 1. Explicit kb:slug
-        if ":" in raw_slug and not raw_slug.startswith("http"):
-            qid = qualified_slug_to_id.get(raw_slug)
-            if qid:
-                return qid
-        # 2. Context-aware: prefer the note's own KB
+
+        # 1. Explicit kb:slug — fail closed if not found
+        if is_explicit:
+            return qualified_slug_to_id.get(raw_slug)
+
+        # 2. Plain [[slug]] — context-aware: prefer the note's own KB
         if context_kb:
             qid = slug_by_kb.get((context_kb, bare))
             if qid:
                 return qid
+
         # 3. Bare slug fallback (only if unambiguous)
         entry = all_bare_slugs.get(bare)
         if entry and not isinstance(entry, list):
