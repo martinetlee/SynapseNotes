@@ -35,12 +35,20 @@ def generate_test_cases(queries, max_cases=10):
             continue
 
         # Build retrieval context by reading actual note content
+        # Search across all KB directories for each slug
         context_parts = []
+        registry = kb_index.get_registry()
         for r in results[:3]:  # Top 3 for context
-            note_path = ROOT / "notes" / f"{r['slug']}.md"
-            if note_path.exists():
+            slug = r["slug"]
+            note_path = None
+            for kbc in registry.all_kbs():
+                candidate = kbc.notes_dir / f"{slug}.md"
+                if candidate.exists():
+                    note_path = candidate
+                    break
+            if note_path and note_path.exists():
                 fm, body, _ = kb_index.parse_note(note_path)
-                context_parts.append(f"[{r['slug']}]: {body[:1500]}")
+                context_parts.append(f"[{slug}]: {body[:1500]}")
 
         if not context_parts:
             continue

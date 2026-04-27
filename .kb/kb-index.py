@@ -950,17 +950,17 @@ def lint_note(filepath, taxonomy_tags=None, all_slugs=None, kb_name=None):
                 if target not in all_slugs:
                     issues.append(("warning", f"Broken wikilink: [[{target}]] (note does not exist)"))
 
-    # Citation paths
-    ref_citations = re.findall(r'\[([^\]]+)\]\((\.\.\/references\/[^)]+|references\/[^)]+)\)', body)
+    # Citation paths — handle any depth of ../ prefix (notes can be at kbs/<name>/ = ../../references/)
+    ref_citations = re.findall(r'\[([^\]]+)\]\(((?:\.\./)*references/[^)]+)\)', body)
     for text, ref_path in ref_citations:
-        full_path = REFS / ref_path.replace("../references/", "").replace("references/", "")
+        full_path = REFS / re.sub(r'^(\.\./)*references/', '', ref_path)
         if not full_path.exists():
             issues.append(("warning", f"Broken citation: [{text}]({ref_path}) (file not found)"))
 
     # Sources frontmatter paths
     for src in fm.get("sources", []):
         if isinstance(src, str) and ("references/" in src):
-            full_path = REFS / src.replace("../references/", "").replace("references/", "")
+            full_path = REFS / re.sub(r'^(\.\./)*references/', '', src)
             if not full_path.exists():
                 issues.append(("warning", f"Source file not found: {src}"))
 

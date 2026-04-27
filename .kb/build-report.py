@@ -44,15 +44,38 @@ def _load_kb_dirs():
 
 
 def find_note(slug):
-    """Find a note file across all KBs. Returns the Path or None."""
-    # Support cross-KB syntax "kb:slug" — strip the prefix
-    if ":" in slug:
-        slug = slug.split(":", 1)[1]
-    for kb_dir in _load_kb_dirs():
-        candidate = kb_dir / f"{slug}.md"
+    """Find a note file across all KBs. Returns the Path or None.
+
+    Handles cross-KB syntax 'kb:slug' by searching the named KB first.
+    If no prefix, searches all KBs (first match wins — prints warning if ambiguous).
+    """
+    target_kb = None
+    bare_slug = slug
+    if ":" in slug and not slug.startswith("http"):
+        target_kb, bare_slug = slug.split(":", 1)
+
+    kb_dirs = _load_kb_dirs()
+
+    if target_kb:
+        # Explicit KB: search only that KB
+        for kb_dir in kb_dirs:
+            if kb_dir.name == target_kb:
+                candidate = kb_dir / f"{bare_slug}.md"
+                if candidate.exists():
+                    return candidate
+        # Fall through to search all if named KB not found
+
+    # Search all KBs, track matches for ambiguity detection
+    matches = []
+    for kb_dir in kb_dirs:
+        candidate = kb_dir / f"{bare_slug}.md"
         if candidate.exists():
-            return candidate
-    return None
+            matches.append(candidate)
+
+    if len(matches) > 1:
+        print(f"Warning: slug '{bare_slug}' found in {len(matches)} KBs: {[m.parent.name for m in matches]}. Using first match.", file=sys.stderr)
+
+    return matches[0] if matches else None
 
 
 def load_hub_threshold():

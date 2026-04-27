@@ -44,6 +44,16 @@ mcp = FastMCP(
 _last_check = None
 
 
+def _guard_private_kb(kb_name):
+    """Block MCP access to private KBs. Returns error string or None if allowed."""
+    if kb_name:
+        registry = kb_mod.get_registry()
+        kbc = registry.get(kb_name)
+        if kbc and kbc.private:
+            return f"KB '{kb_name}' is private and cannot be accessed via MCP. Use Claude Code directly in the KB project."
+    return None
+
+
 def _ensure_index_fresh():
     """Rebuild index if notes have changed since last build."""
     global _last_check
@@ -58,6 +68,9 @@ def _ensure_index_fresh():
     needs_rebuild = False
 
     for kbc in registry.all_kbs():
+        # Skip empty KBs — they'll never have a meta_file and would trigger infinite rebuilds
+        if not kbc.notes_dir.exists() or not list(kbc.notes_dir.glob("*.md")):
+            continue
         meta_file = kbc.meta_file
         if not meta_file.exists():
             needs_rebuild = True
@@ -84,14 +97,16 @@ def _ensure_index_fresh():
 
 @mcp.tool()
 def kb_list() -> str:
-    """List all available knowledge bases with name, note count, and privacy flag."""
+    """List all available knowledge bases with name and note count. Private KBs show name only."""
     registry = kb_mod.get_registry()
     lines = []
     for kbc in registry.all_kbs():
-        notes = list(kbc.notes_dir.glob("*.md")) if kbc.notes_dir.exists() else []
-        privacy = " [PRIVATE]" if kbc.private else ""
-        default = " [DEFAULT]" if kbc.default else ""
-        lines.append(f"  {kbc.name}{default}{privacy} — {len(notes)} notes ({kbc.notes_dir})")
+        if kbc.private:
+            lines.append(f"  {kbc.name} [PRIVATE] — access restricted")
+        else:
+            notes = list(kbc.notes_dir.glob("*.md")) if kbc.notes_dir.exists() else []
+            default = " [DEFAULT]" if kbc.default else ""
+            lines.append(f"  {kbc.name}{default} — {len(notes)} notes")
     return f"Available KBs ({len(lines)}):\n" + "\n".join(lines)
 
 
@@ -104,8 +119,11 @@ def kb_search(query: str, reformulations: list[str] | None = None, tags: str | N
         reformulations: Optional alternative phrasings for multi-query fusion (improves recall)
         tags: Comma-separated tag filter (e.g. "scam-detection,fraud")
         type: Note type filter (concept, question, insight, reference, synthesis)
-        kb: Target a specific KB by name; omit to search unified index
+        kb: Target a specific KB by name; omit to search unified index. Private KBs are blocked.
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
     tag_list = tags.split(",") if tags else None
 
@@ -137,6 +155,9 @@ def kb_quick(query: str, kb: str | None = None) -> str:
         query: The term or concept to look up
         kb: Target a specific KB by name; omit to search all KB metadata
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
     results = kb_mod.quick_search(query, kb_name=kb)
 
@@ -156,8 +177,11 @@ def kb_read(slug: str, kb: str | None = None) -> str:
 
     Args:
         slug: The note slug (filename without .md), e.g. "tcp-congestion-control"
-        kb: Target a specific KB by name; omit to search all non-private KBs
+        kb: Target a specific KB by name; omit to search all non-private KBs. Private KBs are blocked.
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     registry = kb_mod.get_registry()
 
     if kb:
@@ -185,6 +209,9 @@ def kb_map(kb: str | None = None) -> str:
     Args:
         kb: Target a specific KB by name; omit for unified view
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
     tmap = kb_mod.topic_map(kb_name=kb)
 
@@ -211,6 +238,9 @@ def kb_explore(slug: str, max_steps: int = 5, kb: str | None = None) -> str:
         max_steps: Maximum number of notes in the path (default 5)
         kb: Target a specific KB by name; omit for unified view
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
     path = kb_mod.explore_path(slug, max_steps, kb_name=kb)
 
@@ -245,6 +275,9 @@ def kb_gaps(kb: str | None = None) -> str:
     Args:
         kb: Target a specific KB by name; omit for unified view
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
     gaps = kb_mod.find_topic_gaps(kb_name=kb)
 
@@ -267,6 +300,9 @@ def kb_stats(kb: str | None = None) -> str:
     Args:
         kb: Target a specific KB by name; omit for unified stats
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
 
     registry = kb_mod.get_registry()
@@ -338,6 +374,9 @@ def kb_coverage(topic: str, kb: str | None = None) -> str:
         topic: The topic to check coverage for
         kb: Target a specific KB by name; omit for unified check
     """
+    err = _guard_private_kb(kb)
+    if err:
+        return err
     _ensure_index_fresh()
     result = kb_mod.check_coverage(topic, kb_name=kb)
 
