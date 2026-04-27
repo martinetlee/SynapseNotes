@@ -55,9 +55,15 @@ Search the knowledge base for notes relevant to the user's query and synthesize 
 
    **Answer** at the top — a coherent response assembled from matched notes. Every factual claim must cite `[[note-name]]`. If synthesizing across multiple notes, show how the pieces connect.
 
+   **Epistemic transparency** — when synthesizing, surface the confidence level:
+   - For claims from `verified` notes: present as established facts
+   - For claims from `likely` notes: present with source attribution
+   - For claims from `speculative` or `opinion` notes: explicitly flag as analysis/opinion, e.g., "According to Prestwich's analysis [opinion]: ..."
+   - For claims from `disputed` notes: present both sides
+
    **Coverage assessment** — what the KB covers well vs what's missing or thin.
 
-   **Notes consulted** — list of all matched notes with title, score, and relevance.
+   **Notes consulted** — list of all matched notes with title, score, epistemic status, and relevance.
 
 7. **Handle edge cases**:
    - **No matches**: "The KB has no coverage on this topic." Suggest `/kb-question <query>` or `/kb-research <topic>`.

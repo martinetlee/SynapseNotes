@@ -89,11 +89,18 @@ For each research question, run the research loop:
    # Title
    Source: https://original-url
    Fetched: YYYY-MM-DD
+   Source-Type: primary | secondary | opinion | unverified
 
    ## Key Content
    (structured summary of findings)
    ```
-   Only save sources that are substantive and worth citing — don't save every search result. These files become the citation targets for notes.
+   Classify each source:
+   - **primary**: on-chain data, audit reports, official post-mortems, academic papers, protocol docs
+   - **secondary**: security firm blog posts, Rekt News, Chainalysis/Halborn reports
+   - **opinion**: tweets, blog opinion pieces, community commentary
+   - **unverified**: news articles, aggregator summaries
+
+   Only save sources that are substantive and worth citing. These files become the citation targets for notes.
 
 4. **Extract findings** — Note key facts, claims, frameworks, and insights. Track which source each finding comes from.
 
@@ -161,7 +168,12 @@ After all questions are researched:
 4. **Create notes** — For each selected note:
    a. **Contradiction check**: Run `python3 .kb/kb-index.py search "NOTE_TITLE" --kb <kb_name>` to find similar existing notes. If score > 0.3, read those notes and check for conflicting claims. If contradictions found, ask user: reconcile, update existing, or create separate with link?
    b. **Dedup check**: If similar note score > 0.5, it likely covers the same concept — suggest updating the existing note instead of creating a duplicate.
-   c. Create/update following CLAUDE.md format
+   c. Create/update following CLAUDE.md format. **Assign `epistemic_status`** based on source quality:
+      - `verified` if backed by primary sources (on-chain data, audit reports, official post-mortems)
+      - `likely` if backed by credible secondary sources (security firm analyses, Rekt News)
+      - `speculative` if based on inference or extrapolation
+      - `disputed` if conflicting claims exist
+      - `opinion` if the note contains the author's judgment
    d. **Cite all sources inline via local reference files** — every claim must trace back to `[display text](../../references/filename.md)` (two levels up from `kbs/<kb_name>/`). The reference file contains the external URL. Never cite external URLs directly in notes if a reference file exists for that source.
    e. Add `[[wikilinks]]` to the research hub and related notes, in both directions
    f. **Define terms inline** — on first use of a technical term not commonly known, add a brief parenthetical definition. Link to a concept note via wikilink only if one exists.

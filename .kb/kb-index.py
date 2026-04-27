@@ -35,6 +35,9 @@ Usage:
   python3 .kb/kb-index.py map                        # Topic map with coverage stats
   python3 .kb/kb-index.py explore <slug> [steps]     # Suggested reading path from a note
   python3 .kb/kb-index.py gaps                       # Find thin/weak topic areas
+  python3 .kb/kb-index.py gaps suggestions           # Ranked research & synthesis suggestions
+  python3 .kb/kb-index.py patterns                   # Detect recurring patterns (e.g. exploit types)
+  python3 .kb/kb-index.py contradictions-scan        # Scan for contradictory facts across notes
   python3 .kb/kb-index.py eval                       # Run retrieval evaluation
   python3 .kb/kb-index.py eval generation            # Run generation (faithfulness) evaluation
   python3 .kb/kb-index.py eval all --verbose         # Run all evaluations with details
@@ -1477,6 +1480,438 @@ def find_research_gaps(kb_name=None):
 
 
 # ---------------------------------------------------------------------------
+# Pattern detection
+# ---------------------------------------------------------------------------
+
+# Tags that represent exploit classification categories
+CLASSIFICATION_TAGS = {
+    "reentrancy", "oracle-manipulation", "key-compromise", "bridge-security",
+    "flash-loan", "access-control", "price-manipulation", "governance-attack",
+    "front-running", "sandwich-attack", "rug-pull", "logic-error",
+    "signature-replay", "cross-chain", "mev", "social-engineering",
+    "private-key-leak", "smart-contract-vulnerability", "upgrade-vulnerability",
+}
+
+
+def find_patterns(kb_name=None):
+    """Group notes by shared tags to find recurring attack/topic patterns.
+
+    For exploit/incident notes, groups by classification tags and checks
+    whether a synthesis/concept note already exists for each pattern.
+    """
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        meta_file = kb.meta_file
+    else:
+        meta_file = UNIFIED_DIR / "metadata.json"
+
+    if not meta_file.exists():
+        print("No index. Run: python3 .kb/kb-index.py build")
+        return []
+
+    metadata = json.loads(meta_file.read_text())
+
+    # Identify exploit/incident notes
+    exploit_tags = {"defi-exploits", "incidents", "exploit", "exploits", "hack", "hacks"}
+    incident_prefix = "incidents-"
+
+    exploit_slugs = set()
+    for slug, meta in metadata.items():
+        tags = set(meta.get("tags", []))
+        if tags & exploit_tags or any(t.startswith(incident_prefix) for t in tags):
+            exploit_slugs.add(slug)
+
+    # Group exploit notes by classification tags
+    tag_groups = defaultdict(list)
+    for slug in exploit_slugs:
+        meta = metadata[slug]
+        tags = set(meta.get("tags", []))
+        # Match against known classification tags OR any tag on 3+ exploit notes
+        for tag in tags:
+            if tag in CLASSIFICATION_TAGS or tag.startswith(incident_prefix):
+                tag_groups[tag].append(slug)
+
+    # Also group ALL notes by tag (not just exploits) for broader patterns
+    all_tag_groups = defaultdict(list)
+    for slug, meta in metadata.items():
+        for tag in meta.get("tags", []):
+            all_tag_groups[tag].append(slug)
+
+    # Merge: prefer exploit-specific groups, supplement with all-tag groups
+    # that have classification tags
+    for tag in list(all_tag_groups.keys()):
+        if tag in CLASSIFICATION_TAGS and tag not in tag_groups:
+            tag_groups[tag] = all_tag_groups[tag]
+
+    # Filter to patterns with 3+ notes
+    patterns = []
+    for tag, slugs_list in sorted(tag_groups.items(), key=lambda x: -len(x[1])):
+        if len(slugs_list) < 3:
+            continue
+
+        # Check if a synthesis or concept note exists for this pattern
+        has_synthesis = None
+        for slug, meta in metadata.items():
+            if slug in slugs_list:
+                continue
+            meta_type = meta.get("type", "")
+            if meta_type in ("synthesis", "concept"):
+                meta_tags = set(meta.get("tags", []))
+                title_lower = meta.get("title", "").lower()
+                tag_lower = tag.lower().replace("-", " ").replace("_", " ")
+                if tag in meta_tags or tag_lower in title_lower:
+                    has_synthesis = slug
+                    break
+
+        patterns.append({
+            "pattern": tag,
+            "count": len(slugs_list),
+            "example_notes": sorted(slugs_list)[:6],
+            "has_synthesis_note": has_synthesis,
+        })
+
+    return sorted(patterns, key=lambda x: -x["count"])
+
+
+# ---------------------------------------------------------------------------
+# Contradictions scan
+# ---------------------------------------------------------------------------
+
+# Regex for dollar amounts: $624M, $1.4B, $100 million, $1,234,567, etc.
+_DOLLAR_RE = re.compile(
+    r'\$\s*([\d,.]+)\s*([BMKbmk](?:illion|ill)?)?'
+)
+
+
+def _parse_dollar(match_str, suffix_str):
+    """Parse a dollar amount string into a float (in millions)."""
+    num = float(match_str.replace(",", ""))
+    if suffix_str:
+        s = suffix_str.lower()
+        if s.startswith("b"):
+            num *= 1000  # billions to millions
+        elif s.startswith("m"):
+            pass  # already in millions
+        elif s.startswith("k"):
+            num /= 1000  # thousands to millions
+    else:
+        # Raw number -- if it's large enough, assume dollars
+        if num >= 1_000_000:
+            num /= 1_000_000  # convert to millions
+        elif num >= 1_000:
+            num /= 1_000_000  # still dollars, just smaller
+        else:
+            # Small number, could be millions already or just dollars
+            # Heuristic: if < 1000 and no suffix, treat as millions
+            pass
+    return num
+
+
+def _extract_amounts(text):
+    """Extract all dollar amounts from text, returned as list of (original_str, value_in_millions)."""
+    results = []
+    for m in _DOLLAR_RE.finditer(text):
+        try:
+            val = _parse_dollar(m.group(1), m.group(2))
+            results.append((m.group(0), val))
+        except (ValueError, IndexError):
+            continue
+    return results
+
+
+def _extract_entity_from_title(title):
+    """Extract a likely entity/protocol name from a note title.
+
+    E.g., 'Ronin Exploit ($624M)' -> 'ronin'
+          'Bybit Exploit 1.4B' -> 'bybit'
+    """
+    # Remove common suffixes
+    cleaned = re.sub(r'\s*\(.*?\)', '', title)
+    cleaned = re.sub(r'\s*[-\u2013]\s*\$.*', '', cleaned)
+    cleaned = re.sub(
+        r'\b(exploit|hack|attack|incident|bridge|rekt|overview|analysis|deep.?dive|technical|post.?mortem)\b',
+        '', cleaned, flags=re.IGNORECASE
+    )
+    # Generic words that don't identify a specific incident/protocol
+    _GENERIC_TITLE_WORDS = {
+        "the", "and", "of", "for", "in", "on", "with", "from", "to", "by",
+        "security", "smart", "contract", "vulnerability", "protocol", "finance",
+        "capital", "network", "chain", "cross", "defi", "web3", "blockchain",
+        "oracle", "token", "how", "why", "what", "are", "their", "all",
+        "pattern", "trends", "architecture", "comparison", "classification",
+        "landscape", "largest", "top", "major", "key", "risk", "fund",
+    }
+    # Take the first meaningful word(s)
+    words = [w.strip().lower() for w in cleaned.split()
+             if w.strip() and len(w.strip()) > 2 and w.strip().lower() not in _GENERIC_TITLE_WORDS]
+    return words[0] if words else None
+
+
+def scan_contradictions(kb_name=None):
+    """Scan for contradictory facts across notes about the same incidents.
+
+    Detects:
+    - Dollar amount mismatches for the same incident
+    - Date conflicts
+    """
+    reg = get_registry()
+    if kb_name:
+        kbs_to_check = [resolve_kb(kb_name)]
+    else:
+        kbs_to_check = reg.all_kbs()
+
+    # Load all note content (need bodies for amount extraction)
+    notes_data = {}  # slug -> {title, body, amounts, tags, path}
+    for kbc in kbs_to_check:
+        if not kbc.notes_dir.exists():
+            continue
+        for path in sorted(kbc.notes_dir.glob("*.md")):
+            fm, body, _ = parse_note(path)
+            slug = path.stem
+            title = fm.get("title", slug)
+            amounts = _extract_amounts(body)
+            # Also extract amounts from title
+            amounts.extend(_extract_amounts(title))
+            notes_data[slug] = {
+                "title": title,
+                "body": body,
+                "amounts": amounts,
+                "tags": fm.get("tags", []),
+                "path": str(path),
+            }
+
+    # Generic entity names that don't refer to specific protocols/incidents
+    _GENERIC_ENTITIES = {
+        "bridge", "cross", "defi", "web3", "blockchain", "smart", "oracle",
+        "token", "price", "flash", "key", "access", "social", "legacy",
+        "responsible", "largest", "research", "synthesis", "overview",
+        "solana", "ethereum", "bitcoin",  # L1 chains are too broad
+        "custodial", "intent", "liquidity", "light", "durable",
+        "exploits", "hacks", "databases", "accounts", "categories",
+        "manipulation", "vulnerability", "security", "landscape",
+        "comparison", "classification", "composability", "step",
+        "fund", "flow", "april", "crypto", "trezor", "yieldblox",
+        "cross-chain", "smart-contract",
+    }
+
+    # Group notes by entity (shared entity names in titles)
+    entity_groups = defaultdict(list)
+    for slug, data in notes_data.items():
+        entity = _extract_entity_from_title(data["title"])
+        if entity and len(entity) > 3 and entity not in _GENERIC_ENTITIES:
+            entity_groups[entity].append(slug)
+
+    # Also match on slug prefix for protocol-specific notes
+    for slug in notes_data:
+        parts = slug.split("-")
+        if parts and len(parts[0]) > 3 and parts[0] not in _GENERIC_ENTITIES:
+            entity_groups[parts[0]].append(slug)
+
+    # Deduplicate entity group members
+    for entity in entity_groups:
+        entity_groups[entity] = list(dict.fromkeys(entity_groups[entity]))
+
+    contradictions = []
+
+    # Check dollar amount mismatches within each entity group
+    for entity, slugs_list in entity_groups.items():
+        if len(slugs_list) < 2:
+            continue
+
+        # Collect the largest dollar amount per note as the "headline" figure
+        slug_amounts = {}
+        for slug in slugs_list:
+            data = notes_data.get(slug)
+            if not data or not data["amounts"]:
+                continue
+            # Use the largest amount as the headline figure
+            largest = max(data["amounts"], key=lambda x: x[1])
+            slug_amounts[slug] = largest
+
+        # Compare pairs
+        checked = set()
+        for s1, (orig1, val1) in slug_amounts.items():
+            for s2, (orig2, val2) in slug_amounts.items():
+                if s1 >= s2:
+                    continue
+                pair = (s1, s2)
+                if pair in checked:
+                    continue
+                checked.add(pair)
+
+                if val1 == 0 or val2 == 0:
+                    continue
+
+                ratio = max(val1, val2) / min(val1, val2)
+                if ratio > 1.10:  # >10% difference
+                    contradictions.append({
+                        "entity": entity,
+                        "type": "amount_mismatch",
+                        "slug1": s1,
+                        "slug2": s2,
+                        "detail1": orig1,
+                        "detail2": orig2,
+                        "suggestion": "Check which is correct (pre-recovery vs post-recovery?)",
+                    })
+
+    # Check for overview/list notes vs individual incident notes
+    # Only compare when the overview note has a table/list with entity + amount on same line
+    overview_slugs = [s for s in notes_data if "largest" in s or ("overview" in s and "exploit" in s)]
+    for overview_slug in overview_slugs:
+        overview_body = notes_data[overview_slug]["body"]
+        if not overview_body:
+            continue
+
+        # Parse line-by-line: look for lines containing both an entity name and a dollar amount
+        for line in overview_body.split("\n"):
+            line_amounts = _extract_amounts(line)
+            if not line_amounts:
+                continue
+            line_lower = line.lower()
+
+            for slug, data in notes_data.items():
+                if slug == overview_slug or not data["amounts"]:
+                    continue
+                entity = _extract_entity_from_title(data["title"])
+                if not entity or len(entity) < 4 or entity in _GENERIC_ENTITIES:
+                    continue
+
+                # Check if this specific entity appears on this line
+                if entity.lower() not in line_lower:
+                    continue
+
+                largest_individual = max(data["amounts"], key=lambda x: x[1])
+                # Use the amount on this line (closest to entity)
+                for ov_orig, ov_val in line_amounts:
+                    if ov_val == 0 or largest_individual[1] == 0:
+                        continue
+                    ratio = max(ov_val, largest_individual[1]) / min(ov_val, largest_individual[1])
+                    if ratio > 1.10:
+                        contradictions.append({
+                            "entity": entity,
+                            "type": "overview_mismatch",
+                            "slug1": slug,
+                            "slug2": overview_slug,
+                            "detail1": largest_individual[0],
+                            "detail2": ov_orig,
+                            "suggestion": "Overview note vs individual note disagree",
+                        })
+
+    # Deduplicate contradictions by entity+slugs
+    seen = set()
+    unique = []
+    for c in contradictions:
+        key = (c["entity"], tuple(sorted([c["slug1"], c["slug2"]])))
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+
+    return unique
+
+
+# ---------------------------------------------------------------------------
+# Gap suggestions (enhanced gaps command)
+# ---------------------------------------------------------------------------
+
+def find_gap_suggestions(kb_name=None):
+    """Generate ranked research and synthesis suggestions.
+
+    Combines:
+    - Unsynthesized patterns from find_patterns()
+    - High-degree notes with no incoming synthesis links
+    - Topic clusters with no insights (all concepts)
+    """
+    if kb_name:
+        kb = resolve_kb(kb_name)
+        meta_file = kb.meta_file
+        graph_file = kb.graph_file
+    else:
+        meta_file = UNIFIED_DIR / "metadata.json"
+        graph_file = UNIFIED_DIR / "graph.json"
+
+    if not meta_file.exists():
+        print("No index. Run: python3 .kb/kb-index.py build")
+        return []
+
+    metadata = json.loads(meta_file.read_text())
+    suggestions = []
+
+    # 1. Unsynthesized patterns
+    patterns = find_patterns(kb_name)
+    for p in patterns:
+        if p["has_synthesis_note"]:
+            continue
+
+        # Estimate total dollar amount for exploit-related patterns
+        total_amount = 0
+        for slug in p["example_notes"]:
+            meta = metadata.get(slug, {})
+            title = meta.get("title", "")
+            amts = _extract_amounts(title)
+            if amts:
+                total_amount += max(a[1] for a in amts)
+
+        amount_str = ""
+        if total_amount > 0:
+            if total_amount >= 1000:
+                amount_str = f", ${total_amount/1000:.1f}B total"
+            else:
+                amount_str = f", ${total_amount:.0f}M total"
+
+        suggestions.append({
+            "priority": "HIGH",
+            "type": "missing_synthesis",
+            "description": f'Synthesize "{p["pattern"]}" pattern ({p["count"]} incidents{amount_str})',
+            "detail": f'Missing: a dedicated synthesis note connecting all {p["pattern"]} incidents',
+            "score": p["count"] * 10 + total_amount,
+        })
+
+    # 2. Topic clusters with no insights (all concepts, no insights)
+    tmap = topic_map(kb_name)
+    for tag, data in tmap.items():
+        types = data.get("types", {})
+        concept_count = types.get("concept", 0) + types.get("reference", 0)
+        insight_count = types.get("insight", 0) + types.get("synthesis", 0)
+        if concept_count >= 3 and insight_count == 0:
+            suggestions.append({
+                "priority": "MEDIUM",
+                "type": "no_insights",
+                "description": f'Add insights to "{tag}" cluster ({concept_count} concepts, 0 insights)',
+                "detail": "All notes are factual; no cross-cutting observations yet",
+                "score": concept_count * 5,
+            })
+
+    # 3. Orphan notes (no incoming links) that are not synthesis/reference type
+    if graph_file.exists():
+        graph = json.loads(graph_file.read_text())
+        adj = graph.get("adjacency", {})
+
+        # Count incoming links per note
+        incoming_count = defaultdict(int)
+        for slug, edges in adj.items():
+            for target in edges.get("outgoing", []):
+                incoming_count[target] += 1
+
+        for slug, meta in metadata.items():
+            bare = slug.split(":")[-1] if ":" in slug else slug
+            note_type = meta.get("type", "")
+            if note_type in ("synthesis", "reference"):
+                continue
+            if incoming_count.get(slug, 0) == 0 and incoming_count.get(bare, 0) == 0:
+                suggestions.append({
+                    "priority": "LOW",
+                    "type": "orphan",
+                    "description": f'Link orphan note: {bare} has no incoming links',
+                    "detail": f'Title: {meta.get("title", bare)}',
+                    "score": meta.get("word_count", 0) / 100,
+                })
+
+    # Sort by score descending
+    suggestions.sort(key=lambda x: -x["score"])
+    return suggestions
+
+
+# ---------------------------------------------------------------------------
 # Synthesis staleness
 # ---------------------------------------------------------------------------
 
@@ -2412,6 +2847,37 @@ if __name__ == "__main__":
                 print(f"  {arrow} {i+1}. [{meta.get('type','')}] {meta.get('title', s)}")
                 print(f"       {s} ({meta.get('word_count', '?')} words)")
 
+    elif cmd == "patterns":
+        patterns = find_patterns(kb_name)
+        if not patterns:
+            print("No recurring patterns detected (need 3+ notes per tag).")
+        else:
+            print(f"Detected patterns ({len(patterns)}):\n")
+            for p in patterns:
+                synth = p["has_synthesis_note"]
+                if synth:
+                    synth_label = f"HAS synthesis: {synth}"
+                else:
+                    synth_label = "NO synthesis note"
+                print(f"  {p['pattern']} ({p['count']} notes, {synth_label})")
+                examples = ", ".join(p["example_notes"])
+                print(f"    -> {examples}")
+                if not synth:
+                    print(f"    Suggestion: create a synthesis note for this pattern")
+                print()
+
+    elif cmd == "contradictions-scan":
+        results = scan_contradictions(kb_name)
+        if not results:
+            print("No potential contradictions found.")
+        else:
+            print(f"Potential contradictions found ({len(results)}):\n")
+            for c in results:
+                entity = c["entity"].capitalize()
+                print(f"  {entity}: {c['detail1']} in {c['slug1']} vs {c['detail2']} in {c['slug2']}")
+                print(f"    -> {c['suggestion']}")
+                print()
+
     elif cmd == "gaps":
         subcmd = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else "topics"
 
@@ -2440,6 +2906,17 @@ if __name__ == "__main__":
                         print(f"    - {gap}")
                     print()
 
+        elif subcmd == "suggestions":
+            suggestions = find_gap_suggestions(kb_name)
+            if not suggestions:
+                print("No research or synthesis suggestions.")
+            else:
+                print(f"Research & synthesis suggestions ({len(suggestions)}):\n")
+                for i, s in enumerate(suggestions, 1):
+                    print(f"  {i}. [{s['priority']}] {s['description']}")
+                    print(f"     {s['detail']}")
+                    print()
+
         elif subcmd == "all":
             tgaps = find_topic_gaps(kb_name)
             rgaps = find_research_gaps(kb_name)
@@ -2462,7 +2939,7 @@ if __name__ == "__main__":
                 print("No gaps found.")
 
         else:
-            print("Usage: kb-index.py gaps [topics|research|all] [--kb name]")
+            print("Usage: kb-index.py gaps [topics|research|suggestions|all] [--kb name]")
 
     elif cmd == "eval":
         subcmd = sys.argv[2] if len(sys.argv) > 2 else "retrieval"

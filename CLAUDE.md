@@ -53,6 +53,25 @@ kbs:
 
 **`references/`** — Shared across all KBs. Contains structured summaries of source material (papers, articles, docs). Each file has the external URL at the top (`Source: https://...`) and a summary of key content. Claude may **write new files** here, but must **never edit or delete existing files**. Notes cite these local files rather than external URLs directly.
 
+Reference files should include a `source_type` classification:
+```markdown
+# Title
+Source: https://url
+Fetched: YYYY-MM-DD
+Source-Type: primary | secondary | opinion | unverified
+
+## Key Content
+...
+```
+
+Source types:
+- **primary** — on-chain data, audit reports, official post-mortems, academic papers, protocol documentation
+- **secondary** — security firm blog posts, Rekt News write-ups, Chainalysis/Halborn reports
+- **opinion** — tweets, blog opinion pieces, community commentary
+- **unverified** — news articles, aggregator summaries, AI-generated content
+
+Notes inherit confidence from their sources. A note citing only primary sources has higher epistemic weight than one citing opinions.
+
 ## Note Format
 
 All notes use this format:
@@ -64,6 +83,7 @@ tags: [tag1, tag2]
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 type: question | concept | reference | insight | synthesis
+epistemic_status: verified | likely | speculative | disputed | opinion
 valid_from: YYYY-MM-DD    # when this information became true (optional)
 valid_until: null          # null = still valid; date = superseded/expired
 deprecated_by: null        # slug of superseding note, if any
@@ -74,6 +94,15 @@ related: []
 
 (body in markdown with [[wikilinks]] to related notes)
 ```
+
+**Epistemic status**: How confident are we in this note's claims?
+- **verified** — backed by on-chain data, audit reports, or other primary sources. Independently confirmable.
+- **likely** — backed by credible secondary sources (security firm analyses, Rekt News). Consistent with evidence but not independently verified.
+- **speculative** — informed inference or extrapolation. May be wrong as new information emerges.
+- **disputed** — conflicting claims exist (e.g., KelpDAO vs LayerZero blame dispute). Note presents both sides.
+- **opinion** — the author's judgment or interpretation (e.g., "this is a design failure"). Not falsifiable.
+
+When synthesizing across notes, `/kb-search` and `/kb-explain` should surface epistemic status: "Based on verified on-chain data: X. Based on Prestwich's analysis [opinion]: Y."
 
 **Temporal validity**: Notes can become outdated. `valid_from`/`valid_until` track when information was true. `deprecated_by` points to the superseding note. Default retrieval returns only currently-valid entries. `/kb-review` flags notes past their expected freshness window.
 
