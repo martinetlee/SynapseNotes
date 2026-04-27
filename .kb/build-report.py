@@ -121,10 +121,11 @@ def get_source_url(ref_path):
     return None
 
 
-def resolve_wikilinks_and_citations(html, footnotes, slug_to_id):
+def resolve_wikilinks_and_citations(html, footnotes, resolve_fn, context_kb=None):
     """Post-process HTML to resolve wikilinks and citations into anchors/footnotes.
 
-    slug_to_id maps bare slugs and kb:slug forms to qualified HTML IDs.
+    resolve_fn(raw_slug, context_kb) returns a qualified HTML ID or None.
+    context_kb is the KB name of the note being rendered — used to prefer same-KB matches.
     """
 
     # Wikilinks: [[kb:slug|text]], [[slug|text]], [[kb:slug]], or [[slug]]
@@ -136,11 +137,7 @@ def resolve_wikilinks_and_citations(html, footnotes, slug_to_id):
             raw_slug = text = inner
         raw_slug = raw_slug.strip()
         text = text.strip()
-        # Try exact match first (including kb:slug), then bare slug
-        qid = slug_to_id.get(raw_slug)
-        if not qid:
-            bare = raw_slug.split(":", 1)[1] if ":" in raw_slug and not raw_slug.startswith("http") else raw_slug
-            qid = slug_to_id.get(bare)
+        qid = resolve_fn(raw_slug, context_kb)
         if qid:
             return f'<a class="wikilink" href="#{qid}" data-target="{qid}">{text}</a>'
         else:
@@ -176,7 +173,7 @@ def resolve_wikilinks_and_citations(html, footnotes, slug_to_id):
     return html
 
 
-def md_to_html(md_text, footnotes, slug_to_id):
+def md_to_html(md_text, footnotes, resolve_fn, context_kb=None):
     """Convert markdown body to HTML using python-markdown, then resolve wikilinks/citations."""
     # python-markdown handles headings, tables, lists, code, blockquotes, bold, italic, etc.
     md = markdown.Markdown(extensions=[
@@ -203,7 +200,7 @@ def md_to_html(md_text, footnotes, slug_to_id):
             shifted.append(line)
 
     html = md.convert("\n".join(shifted))
-    html = resolve_wikilinks_and_citations(html, footnotes, slug_to_id)
+    html = resolve_wikilinks_and_citations(html, footnotes, resolve_fn, context_kb)
     return html
 
 
@@ -227,51 +224,93 @@ def build_report(slug, custom_title=None):
 
     hub_threshold = load_hub_threshold()
     notes_to_include = []
-    included_slugs = set()   # qualified IDs used in HTML anchors
-    slug_to_id = {}          # maps bare slug → qualified ID for wikilink resolution
+    # Maps qualified ID → True (for existence checks)
+    included_qids = set()
+    # Maps (kb_name, bare_slug) → qid — allows context-aware resolution
+    slug_by_kb = {}
+    # Maps kb:slug → qid (explicit cross-KB links)
+    qualified_slug_to_id = {}
+    # All bare slugs that appear in the report (for fallback)
+    all_bare_slugs = {}  # bare_slug → [qid, ...] (list if ambiguous)
+
+    def _strip_kb_prefix(s):
+        """Strip kb: prefix if present, return (bare_slug)."""
+        if ":" in s and not s.startswith("http"):
+            return s.split(":", 1)[1]
+        return s
 
     def _qualify_slug(bare_slug, note_path):
         """Create a unique ID from slug + KB name to avoid collisions."""
         kb_name = note_path.parent.name if note_path else "unknown"
         return f"{kb_name}--{bare_slug}"
 
-    def _register_note(bare_slug, note_path):
-        """Register a note's qualified ID and bare slug mapping."""
+    def _register_note(raw_slug, note_path):
+        """Register a note. raw_slug may contain kb: prefix — stripped here."""
+        bare_slug = _strip_kb_prefix(raw_slug)
+        kb_name = note_path.parent.name if note_path else "unknown"
         qid = _qualify_slug(bare_slug, note_path)
-        included_slugs.add(qid)
-        # Also register bare slug for wikilink resolution (first match wins)
-        if bare_slug not in slug_to_id:
-            slug_to_id[bare_slug] = qid
-        # Register kb:slug form too
-        if note_path:
-            kb_slug = f"{note_path.parent.name}:{bare_slug}"
-            slug_to_id[kb_slug] = qid
-        return qid
+        included_qids.add(qid)
+        # Register by (kb, bare) for context-aware resolution
+        slug_by_kb[(kb_name, bare_slug)] = qid
+        # Register kb:slug for explicit cross-KB links
+        qualified_slug_to_id[f"{kb_name}:{bare_slug}"] = qid
+        # Track bare slug → qid(s) for ambiguity detection
+        if bare_slug not in all_bare_slugs:
+            all_bare_slugs[bare_slug] = qid
+        elif all_bare_slugs[bare_slug] != qid:
+            # Ambiguous: multiple KBs have this slug
+            if isinstance(all_bare_slugs[bare_slug], list):
+                all_bare_slugs[bare_slug].append(qid)
+            else:
+                all_bare_slugs[bare_slug] = [all_bare_slugs[bare_slug], qid]
+        return bare_slug, qid
+
+    def _resolve_wikilink_slug(raw_slug, context_kb=None):
+        """Resolve a wikilink slug to a qualified ID, preferring the context KB."""
+        bare = _strip_kb_prefix(raw_slug)
+        # 1. Explicit kb:slug
+        if ":" in raw_slug and not raw_slug.startswith("http"):
+            qid = qualified_slug_to_id.get(raw_slug)
+            if qid:
+                return qid
+        # 2. Context-aware: prefer the note's own KB
+        if context_kb:
+            qid = slug_by_kb.get((context_kb, bare))
+            if qid:
+                return qid
+        # 3. Bare slug fallback (only if unambiguous)
+        entry = all_bare_slugs.get(bare)
+        if entry and not isinstance(entry, list):
+            return entry
+        return None
+
+    # Strip any kb: prefix from the root slug before registration
+    root_bare = _strip_kb_prefix(slug)
+    root_kb = note_path.parent.name if note_path else "unknown"
 
     if len(related_slugs) > hub_threshold:  # Hub mode
-        intro_qid = _qualify_slug(slug, note_path)
-        notes_to_include.append(("__intro__", intro_qid, fm, body))
-        _register_note(slug, note_path)
+        root_bare, intro_qid = _register_note(slug, note_path)
+        notes_to_include.append(("__intro__", intro_qid, root_kb, fm, body))
         for rs in related_slugs:
-            bare = rs.split(":", 1)[1] if ":" in rs and not rs.startswith("http") else rs
             rpath = find_note(rs)  # pass original (possibly kb-qualified) to find_note
             if rpath:
                 rfm, rbody = parse_note(rpath)
-                qid = _register_note(bare, rpath)
-                notes_to_include.append((bare, qid, rfm, rbody))
+                bare, qid = _register_note(rs, rpath)
+                rkb = rpath.parent.name
+                notes_to_include.append((bare, qid, rkb, rfm, rbody))
     else:
-        qid = _register_note(slug, note_path)
-        notes_to_include.append((slug, qid, fm, body))
+        root_bare, qid = _register_note(slug, note_path)
+        notes_to_include.append((root_bare, qid, root_kb, fm, body))
 
-    # Build HTML — pass slug_to_id for wikilink resolution
+    # Build HTML — pass resolution function for wikilinks
     footnotes = []
     toc_items = []
     content_sections = []
 
     for entry in notes_to_include:
-        note_slug, qid, note_fm, note_body = entry
+        note_slug, qid, note_kb, note_fm, note_body = entry
         note_title = note_fm.get("title", note_slug.replace("-", " ").title())
-        html_body = md_to_html(note_body, footnotes, slug_to_id)
+        html_body = md_to_html(note_body, footnotes, _resolve_wikilink_slug, note_kb)
 
         if note_slug == "__intro__":
             content_sections.append(f'<div class="section-body">{html_body}</div>')
